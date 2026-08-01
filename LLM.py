@@ -1,10 +1,6 @@
 import os
 from datetime import datetime
 
-from deepagents.backends import StateBackend
-from deepagents.middleware import (
-    SkillsMiddleware,
-)
 from langchain.agents import create_agent
 from langchain.messages import SystemMessage
 from langchain.tools import tool
@@ -36,7 +32,6 @@ def day():
 
     return dias[agora.weekday()]
 
-backend = StateBackend()
 
 def Agent():
     llm = ChatNVIDIA(
