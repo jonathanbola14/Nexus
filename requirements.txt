@@ -1,0 +1,10 @@
+pyaudio
+openWakeWord
+noisereduce
+numpy
+onnx_asr
+webrtcvad
+langchain_nvidia_ai_endpoints
+langchain
+setuptools<81
+huggingface_hub
