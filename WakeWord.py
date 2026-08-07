@@ -52,10 +52,9 @@ def WakeWord(
     last_save,
     cooldown,
     save_delay,
+    player: Play,
     threshold=0.65,
 ):
-    audio = bytes(0)
-
     # Get audio
     mic_audio = np.frombuffer(
         buffer=wake_stream.read(num_frames=1280, exception_on_overflow=False),
@@ -77,11 +76,14 @@ def WakeWord(
 
             print(f'\n\nDetected activation from "{mdl}" model at time!')
 
-            Play().file(file=os.path.join(os.path.dirname(__file__), 'audios', 'activation.wav'))
+            # Reusa o player global (instanciado uma vez em main.py) em vez de
+            # criar um novo Play() — cada Play() abre um PyAudio() + output
+            # stream e nunca os fecharíamos, vazando recursos a cada wake word.
+            player.file(file=os.path.join(os.path.dirname(__file__), 'audios', 'activation.wav'))
             time.sleep(0.15)
 
             print()
-            
+
             audio = collect_speech_frames(stream, RATE, CHUNK)
 
             # Evita reativação: drena frames acumulados no wake_stream durante a fala
@@ -91,4 +93,7 @@ def WakeWord(
 
             return audio, last_save, activation_times
 
+    # Sem áudio: retorna explicitamente None para o main.py poder filtrar com
+    # `if audio is None`. Antes retornava bytes(0), que passava no filtro e
+    # chegava vazio no STT (np.frombuffer de 0 bytes -> array de tamanho 0).
     return None, last_save, activation_times

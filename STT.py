@@ -48,5 +48,7 @@ def Speech_to_Text(data: bytes, RATE: int, model=None):
             n_fft=1024
         )
 
-    result = model.recognize(audio)
+    # Recognize exige sample_rate ao receber waveform numpy (não path).
+    # Sem ele, o modelo pode usar um default incorreto e transcrever errado.
+    result = model.recognize(audio, sample_rate=RATE, target_language="pt-br")
     return result

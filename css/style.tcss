@@ -1,0 +1,23 @@
+        Screen {
+            background: #2A2E43
+        }
+
+        Vertical {
+            height: auto;
+            background: blue
+        }
+
+        #sidebar {
+            dock: right;
+            width: 20;
+            height: 100%;
+        }
+
+        #input {
+            dock: bottom;
+            width: 60%;
+        }
+
+        #input:focus {
+            border: solid rgb(255, 255, 255);
+        }
