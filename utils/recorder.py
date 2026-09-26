@@ -40,6 +40,9 @@ def collect_speech_frames(stream: pyaudio.Stream, RATE: int, CHUNK: int, live: L
                 capture_state = "capturing"
 
         else:
+            if not has_speech:
+                continue
+
             silence += 1
             frames.append(frame)
             if has_speech and capture_state != "silence":

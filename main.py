@@ -1,3 +1,4 @@
+import argparse
 import os
 import queue
 import re
@@ -23,6 +24,7 @@ from LLM import Agent
 from STT import Speech_to_Text, load_stt_model
 from utils.increase_gain import gain
 from utils.play_file import Play
+from utils.recorder import collect_speech_frames
 from WakeWord import WakeWord, configWakeWord
 
 torch.set_num_threads(10)
@@ -212,7 +214,7 @@ def playback_worker():
         player.tensor(audio, samplerate=SAMPLE_RATE)
 
 
-def load_models(load_state):
+def load_models(load_state, use_wake_word):
     """Carrega os modelos em uma thread separada e atualiza o progresso."""
     def set_progress(percent, message):
         with load_state["lock"]:
@@ -225,8 +227,12 @@ def load_models(load_state):
     set_progress(35, "Carregando reconhecimento de voz")
     loaded_stt_model = load_stt_model()
 
-    set_progress(70, "Carregando palavra de ativação")
-    loaded_wake_data = configWakeWord(mic=mic, RATE=RATE, threshold=0.75)
+    if use_wake_word:
+        set_progress(70, "Carregando palavra de ativação")
+        loaded_wake_data = configWakeWord(mic=mic, RATE=RATE, threshold=0.75)
+    else:
+        set_progress(70, "Modo sem palavra de ativação")
+        loaded_wake_data = None
 
     set_progress(90, "Carregando agente")
     loaded_agent = Agent()
@@ -244,6 +250,15 @@ def load_models(load_state):
 
 # Run capture loop, checking for hotwords
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Assistente de voz Nexus")
+    parser.add_argument(
+        "--sem-ativacao",
+        action="store_true",
+        help="Captura a fala diretamente, sem exigir a palavra de ativação",
+    )
+    args = parser.parse_args()
+    use_wake_word = not args.sem_ativacao
+
     load_state = {
         "lock": threading.Lock(),
         "percent": 0,
@@ -263,7 +278,10 @@ if __name__ == "__main__":
             f.writeframes(data=gain(frame=ruido, ganho=2.0))
         player.file(file="audios/beep.wav")
 
-    loader_thread = threading.Thread(target=load_models, args=(load_state,))
+    loader_thread = threading.Thread(
+        target=load_models,
+        args=(load_state, use_wake_word),
+    )
 
     config: RunnableConfig = {
         "configurable": {
@@ -272,7 +290,7 @@ if __name__ == "__main__":
     }
 
 
-    with Live(console=console, refresh_per_second=30) as live:
+    with Live(console=console, refresh_per_second=30, screen=True) as live:
         _, status_line = system_status(_cpu_times())
         status_stop_event = threading.Event()
         status_thread = threading.Thread(
@@ -301,30 +319,35 @@ if __name__ == "__main__":
             live.update(Group(loading_panel, status_line))
             time.sleep(0.1)
         loader_thread.join()
-
         pipeline, stt_model, wake_data, agent = load_state["result"]
-        wake_stream, last_save, activation_times, save_delay, cooldown, owwModel = wake_data
-        live.console.clear()
+        if use_wake_word:
+            wake_stream, last_save, activation_times, save_delay, cooldown, owwModel = wake_data
+        else:
+            wake_stream = None
         session_history = Text()
         live.update(session_view(session_history, status_line))
         time.sleep(0.15)
 
         try:
             while True:
-                audio, last_save, activation_times = WakeWord(
-                    wake_stream,
-                    RATE,
-                    CHUNK,
-                    stream,
-                    owwModel,
-                    activation_times,
-                    last_save,
-                    cooldown,
-                    save_delay,
-                    player,
-                    live
-                )
-                if audio is None:
+                if use_wake_word:
+                    audio, last_save, activation_times = WakeWord(
+                        wake_stream,
+                        RATE,
+                        CHUNK,
+                        stream,
+                        owwModel,
+                        activation_times,
+                        last_save,
+                        cooldown,
+                        save_delay,
+                        player,
+                        live
+                    )
+                else:
+                    audio = collect_speech_frames(stream, RATE, CHUNK, live)
+
+                if not audio:
                     continue
 
                 user_input = Speech_to_Text(data=audio, RATE=RATE, model=stt_model)
@@ -369,23 +392,12 @@ if __name__ == "__main__":
                             cpu_times = update_status_line(status_line, cpu_times)
                             for block in token.content_blocks:
                                 if block["type"] == "reasoning":
-                                    with print_lock:
-                                        if not printed_header_reasoning:
-                                            session_history.append("\nRaciocínio\n", style="bold yellow")
-                                            live.update(session_view(session_history, status_line, state="PENSANDO"))
-                                            printed_header_reasoning = True
-
-                                        session_history.append(block["reasoning"])
-                                        live.update(session_view(session_history, status_line, state="PENSANDO"))
-                                        live.refresh()
+                                    continue
 
                                 elif block["type"] == "text" and block.get("text"):
                                     piece = block["text"]
                                     with print_lock:
                                         if metadata["langgraph_node"] == "tools":
-                                            session_history.append("\nFerramenta\n", style="bold yellow")
-                                            session_history.append(piece + "\n")
-                                            live.update(session_view(session_history, status_line, state="PENSANDO"))
                                             printed_header_reasoning = False
                                             printed_header_text = False
                                             buffer_resposta = ""
@@ -410,12 +422,7 @@ if __name__ == "__main__":
                                         tts_queue.put(sentence)
 
                                 elif block["type"] == "tool_call_chunk":
-                                    if block["name"] != None:
-                                        session_history.append(f"\nFerramenta: {block['name']}\n", style="bold yellow")
-                                        live.update(session_view(session_history, status_line, state="PENSANDO"))
-                                    elif block["args"] != '':
-                                        session_history.append(block['args'])
-                                        live.update(session_view(session_history, status_line, state="PENSANDO"))
+                                    continue
 
                 finally:
                     # Roda mesmo se o agent.stream() acima estourar uma exceção no
@@ -433,14 +440,19 @@ if __name__ == "__main__":
                     tts_thread.join()
                     playback_thread.join()
 
+                    if buffer_resposta.strip():
+                        session_history.append(buffer_resposta.strip() + "\n\n")
+                    live.update(session_view(session_history, status_line))
+
                     print()  # quebra de linha final
 
         except KeyboardInterrupt:
             player.stop()
             stream.stop_stream()
             stream.close()
-            wake_stream.stop_stream()
-            wake_stream.close()
+            if wake_stream is not None:
+                wake_stream.stop_stream()
+                wake_stream.close()
             mic.terminate()
         finally:
             status_stop_event.set()
