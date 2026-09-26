@@ -7,6 +7,9 @@ import numpy as np
 import pyaudio
 from openwakeword import Model as ModelWakeWord
 from pyaudio import PyAudio
+from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
 
 from utils.play_file import Play
 from utils.recorder import collect_speech_frames
@@ -53,6 +56,7 @@ def WakeWord(
     cooldown,
     save_delay,
     player: Play,
+    live: Live,
     threshold=0.65,
 ):
     # Get audio
@@ -74,7 +78,14 @@ def WakeWord(
             last_save = time.time()
             activation_times[mdl] = []
 
-            print(f'\n\nDetected activation from "{mdl}" model at time!')
+            live.update(
+                Panel(
+                    Text(f'Palavra de ativação detectada: {mdl}', style="bold green"),
+                    title="[bold green] NEXUS [/bold green] [dim]/[/dim] [bold]ATIVAÇÃO[/bold]",
+                    border_style="green",
+                    padding=(1, 2),
+                )
+            )
 
             # Reusa o player global (instanciado uma vez em main.py) em vez de
             # criar um novo Play() — cada Play() abre um PyAudio() + output
@@ -82,9 +93,7 @@ def WakeWord(
             player.file(file=os.path.join(os.path.dirname(__file__), 'audios', 'activation.wav'))
             time.sleep(0.15)
 
-            print()
-
-            audio = collect_speech_frames(stream, RATE, CHUNK)
+            audio = collect_speech_frames(stream, RATE, CHUNK, live)
 
             # Evita reativação: drena frames acumulados no wake_stream durante a fala
             wake_stream.read(num_frames=wake_stream.get_read_available(), exception_on_overflow=False)

@@ -1,17 +1,16 @@
-import os
 from datetime import datetime
 
-from langchain.agents import create_agent
-from langchain.messages import SystemMessage
-from langchain.tools import tool
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
-from langgraph.checkpoint.memory import InMemorySaver
-from firecrawl.v2 import FirecrawlClient
+import dotenv
+from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware.memory import MemoryMiddleware
-from langgraph.store.memory import InMemoryStore
-from deepagents import create_deep_agent
+from firecrawl.v2 import FirecrawlClient
+from langchain.messages import SystemMessage
+from langchain.tools import tool
 from langchain_core.runnables import Runnable
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 
 backend = FilesystemBackend()
 middlewares = [MemoryMiddleware(backend=backend, sources=["/memories/AGENTS.md"])]
@@ -47,7 +46,7 @@ def web_seach(query: str, limit: int = 10):
 def Agent():
     llm = ChatNVIDIA(
         model="nvidia/nemotron-3-ultra-550b-a55b",
-        api_key=os.environ["NVIDIA_API_KEY"],
+        api_key=dotenv.dotenv_values().get("NVIDIA_API_KEY"),
         temperature=1,
         top_p=1,
         max_tokens=16384,

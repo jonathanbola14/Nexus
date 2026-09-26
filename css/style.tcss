@@ -1,23 +1,126 @@
-        Screen {
-            background: #2A2E43
-        }
+$background: #101713;
+$surface: #19231e;
+$border: #33443a;
+$muted: #91a398;
+$accent: #a8d7b2;
 
-        Vertical {
-            height: auto;
-            background: blue
-        }
+Screen {
+    background: $background;
+    color: #e8efe9;
+}
 
-        #sidebar {
-            dock: right;
-            width: 20;
-            height: 100%;
-        }
+Header {
+    dock: top;
+    height: 3;
+    background: $surface;
+    color: #e8efe9;
+    border-bottom: solid $border;
+}
 
-        #input {
-            dock: bottom;
-            width: 60%;
-        }
+#sidebar {
+    dock: right;
+    width: 29;
+    height: 1fr;
+    background: $surface;
+    border-left: solid $border;
+    padding: 0 1;
+}
 
-        #input:focus {
-            border: solid rgb(255, 255, 255);
-        }
+#sidebar-content {
+    height: 1fr;
+    padding: 2 1;
+}
+
+#brand {
+    height: 3;
+    color: $accent;
+    text-style: bold;
+    content-align: left middle;
+}
+
+.eyebrow {
+    height: 1;
+    color: $muted;
+    text-style: bold;
+}
+
+#assistant-status {
+    height: 3;
+    margin-top: 1;
+    padding: 0 1;
+    color: #c8ebce;
+    background: #263c2e;
+    border: round #496c53;
+    content-align: left middle;
+    text-style: bold;
+}
+
+.section-label {
+    height: 1;
+    margin-top: 3;
+    color: $muted;
+    text-style: bold;
+}
+
+.system-item {
+    height: 4;
+    margin-top: 1;
+    padding: 0 1;
+    color: #e2eae4;
+    border-left: solid #70977a;
+}
+
+#conversa {
+    width: 1fr;
+    height: 1fr;
+    padding: 1 3 0 3;
+    background: $background;
+}
+
+#conversation-heading {
+    height: 5;
+    padding: 0 0 1 0;
+    border-bottom: solid $border;
+}
+
+#conversation-title {
+    height: 2;
+    color: #edf3ee;
+    text-style: bold;
+}
+
+#conversation-log {
+    height: 1fr;
+    padding: 1 0;
+}
+
+#container-button {
+    height: 8;
+    padding: 1 0;
+    align: center top;
+    border-top: solid $border;
+}
+
+#input-hint {
+    height: 1;
+    margin-bottom: 1;
+    color: $muted;
+    content-align: center middle;
+}
+
+#start-button {
+    width: 30;
+    height: 3;
+    color: #172019;
+    background: $accent;
+    border: none;
+    text-style: bold;
+}
+
+#start-button:hover {
+    background: #c2ebc9;
+}
+
+#start-button:focus {
+    border: round #e8f4ea;
+}

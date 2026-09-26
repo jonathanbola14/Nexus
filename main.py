@@ -1,5 +1,3 @@
-import contextlib
-import io
 import os
 import queue
 import re
@@ -14,9 +12,11 @@ import torch
 from kokoro import KPipeline
 from langchain_core.runnables import RunnableConfig
 from rich import print
-from rich.console import Console
+from rich.align import Align
+from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.text import Text
 
 from LLM import Agent
@@ -41,6 +41,70 @@ _ABBREVIATIONS = {
     "av", "art", "pag", "pág", "cia", "ltda", "etc", "jr", "vs", "min", "seg",
 }
 _LAST_WORD_RE = re.compile(r'([A-Za-zÀ-ÿ]+)$')
+
+
+def _cpu_times():
+    with open("/proc/stat", encoding="ascii") as proc_stat:
+        values = proc_stat.readline().split()[1:]
+    return sum(map(int, values)), int(values[3])
+
+
+def system_status(previous_cpu_times):
+    """Retorna o uso aproximado de CPU e memória do sistema."""
+    current_cpu_times = _cpu_times()
+    total_delta = current_cpu_times[0] - previous_cpu_times[0]
+    idle_delta = current_cpu_times[1] - previous_cpu_times[1]
+    cpu_percent = 0 if total_delta <= 0 else (1 - idle_delta / total_delta) * 100
+
+    memory = {}
+    with open("/proc/meminfo", encoding="ascii") as proc_meminfo:
+        for line in proc_meminfo:
+            key, value = line.split(":", 1)
+            memory[key] = int(value.split()[0])
+    memory_percent = (
+        (memory["MemTotal"] - memory["MemAvailable"]) / memory["MemTotal"] * 100
+    )
+    status = Text(
+        f"CPU {cpu_percent:5.1f}%   MEM {memory_percent:5.1f}%",
+        style="dim cyan",
+    )
+    return current_cpu_times, Align(status, align="right")
+
+
+def update_status_line(status_line, previous_cpu_times):
+    current_cpu_times, new_status_line = system_status(previous_cpu_times)
+    status_line.renderable = new_status_line.renderable
+    return current_cpu_times
+
+
+def status_worker(status_line, stop_event):
+    cpu_times = _cpu_times()
+    while not stop_event.wait(0.3):
+        with print_lock:
+            cpu_times = update_status_line(status_line, cpu_times)
+
+
+def session_view(session_history, status_line, response=None, state="OUVINDO"):
+    title = Text()
+    title.append(" NEXUS ", style="bold green")
+    title.append("/", style="dim")
+    title.append(f" {state} ", style="bold white")
+
+    content = [session_history] if session_history.plain else [
+        Text("Aguardando a palavra de ativação.", style="dim")
+    ]
+    if response is not None:
+        content.append(response)
+
+    return Group(
+        Panel(
+            Group(*content),
+            title=title,
+            border_style="green",
+            padding=(1, 2),
+        ),
+        status_line,
+    )
 
 
 def _is_real_sentence_end(buffer, match):
@@ -111,15 +175,9 @@ def tts_worker():
             break
 
         audio_chunks = []
-        # Silencia qualquer print/warning que o pipeline jogue no stdout/stderr.
-        # ATENÇÃO: redirect_stdout troca sys.stdout pro processo inteiro, não só
-        # pra esta thread — por isso precisa do print_lock, senão os prints da
-        # thread principal (streaming do LLM) somem enquanto isso roda.
-        with print_lock:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                generator = pipeline(sentence, voice="pm_alex")
-                for gs, ps, audio in generator:
-                    audio_chunks.append(audio)
+        generator = pipeline(sentence, voice="pm_alex")
+        for gs, ps, audio in generator:
+            audio_chunks.append(audio)
 
         if audio_chunks:
             full_audio = np.concatenate(audio_chunks) if len(audio_chunks) > 1 else audio_chunks[0]
@@ -154,8 +212,45 @@ def playback_worker():
         player.tensor(audio, samplerate=SAMPLE_RATE)
 
 
+def load_models(load_state):
+    """Carrega os modelos em uma thread separada e atualiza o progresso."""
+    def set_progress(percent, message):
+        with load_state["lock"]:
+            load_state["percent"] = percent
+            load_state["message"] = message
+
+    set_progress(0, "Carregando síntese de voz")
+    loaded_pipeline = KPipeline(lang_code="p", device="cpu")
+
+    set_progress(35, "Carregando reconhecimento de voz")
+    loaded_stt_model = load_stt_model()
+
+    set_progress(70, "Carregando palavra de ativação")
+    loaded_wake_data = configWakeWord(mic=mic, RATE=RATE, threshold=0.75)
+
+    set_progress(90, "Carregando agente")
+    loaded_agent = Agent()
+
+    with load_state["lock"]:
+        load_state["result"] = (
+            loaded_pipeline,
+            loaded_stt_model,
+            loaded_wake_data,
+            loaded_agent,
+        )
+        load_state["percent"] = 100
+        load_state["message"] = "Modelos carregados"
+
+
 # Run capture loop, checking for hotwords
 if __name__ == "__main__":
+    load_state = {
+        "lock": threading.Lock(),
+        "percent": 0,
+        "message": "Iniciando",
+        "result": None,
+    }
+
     if not os.path.exists(path="audios/noise.wav"):
         print("ruido nao coletado")
         time.sleep(0.5)
@@ -168,15 +263,7 @@ if __name__ == "__main__":
             f.writeframes(data=gain(frame=ruido, ganho=2.0))
         player.file(file="audios/beep.wav")
 
-    pipeline = KPipeline(lang_code="p", device="cpu")
-
-    stt_model = load_stt_model()
-
-    wake_stream, last_save, activation_times, save_delay, cooldown, owwModel = (
-        configWakeWord(mic=mic, RATE=RATE)
-    )
-
-    agent = Agent()
+    loader_thread = threading.Thread(target=load_models, args=(load_state,))
 
     config: RunnableConfig = {
         "configurable": {
@@ -184,131 +271,177 @@ if __name__ == "__main__":
         }
     }
 
-    os.system(command="clear")
 
-    time.sleep(0.8)
-
-    print("Ouvindo...")
-
-    time.sleep(0.15)
-
-    try:
-        
-        while True:
-            audio, last_save, activation_times = WakeWord(
-                wake_stream,
-                RATE,
-                CHUNK,
-                stream,
-                owwModel,
-                activation_times,
-                last_save,
-                cooldown,
-                save_delay,
-                player
+    with Live(console=console, refresh_per_second=30) as live:
+        _, status_line = system_status(_cpu_times())
+        status_stop_event = threading.Event()
+        status_thread = threading.Thread(
+            target=status_worker,
+            args=(status_line, status_stop_event),
+            daemon=True,
+        )
+        status_thread.start()
+        loader_thread.start()
+        cpu_times = _cpu_times()
+        while loader_thread.is_alive():
+            with load_state["lock"]:
+                percent = load_state["percent"]
+                message = load_state["message"]
+            cpu_times = update_status_line(status_line, cpu_times)
+            filled = percent // 5
+            loading_panel = Panel(
+                Group(
+                    Text(message, style="bold white"),
+                    Text(f"[{'#' * filled}{'-' * (20 - filled)}] {percent:3d}%", style="green"),
+                ),
+                title="[bold green] NEXUS [/bold green] [dim]/[/dim] [bold]INICIALIZAÇÃO[/bold]",
+                border_style="green",
+                padding=(1, 2),
             )
-            if audio is None:
-                continue
+            live.update(Group(loading_panel, status_line))
+            time.sleep(0.1)
+        loader_thread.join()
 
-            user_input = Speech_to_Text(data=audio, RATE=RATE, model=stt_model)
-            print(f"\nVoce:  {user_input}")
+        pipeline, stt_model, wake_data, agent = load_state["result"]
+        wake_stream, last_save, activation_times, save_delay, cooldown, owwModel = wake_data
+        live.console.clear()
+        session_history = Text()
+        live.update(session_view(session_history, status_line))
+        time.sleep(0.15)
 
-            # Novas threads a cada turno: as do turno anterior já terminaram
-            # (elas retornam ao receberem STOP_SIGNAL e não podem ser reiniciadas)
-            tts_thread = threading.Thread(target=tts_worker, daemon=True)
-            playback_thread = threading.Thread(target=playback_worker, daemon=True)
-            tts_thread.start()
-            playback_thread.start()
+        try:
+            while True:
+                audio, last_save, activation_times = WakeWord(
+                    wake_stream,
+                    RATE,
+                    CHUNK,
+                    stream,
+                    owwModel,
+                    activation_times,
+                    last_save,
+                    cooldown,
+                    save_delay,
+                    player,
+                    live
+                )
+                if audio is None:
+                    continue
 
-            # Buffers e flags por turno: precisam ser resetados aqui, senão
-            # texto/frase do turno anterior vaza (fica grudado) no próximo.
-            text_buffer = ""
-            sentence_buffer = ""
-            printed_header_reasoning = False
-            printed_header_text = False
-            buffer_resposta = ""
-            thinking_text = Text()
-            
-            try:
-                with Live(console=console, refresh_per_second=60) as live:
-                    for chunk in agent.stream(
-                        {
-                            "messages": [
-                                {
-                                    "role": "user",
-                                    "content": user_input
-                                }
-                            ]
-                        },
-                        config=config,
-                        stream_mode="messages",
-                        version="v2",
-                    ):
-                        chunk: dict[str, Any]
-                        token, metadata = chunk["data"]
-                        for block in token.content_blocks:
-                            if block["type"] == "reasoning":
-                                with print_lock:
-                                    if not printed_header_reasoning:
-                                        print("\n🧠 Raciocínio:\n", flush=True)
-                                        printed_header_reasoning = True
+                user_input = Speech_to_Text(data=audio, RATE=RATE, model=stt_model)
+                session_history.append("Você\n", style="bold cyan")
+                session_history.append(f"{user_input}\n\n", style="white")
+                live.update(session_view(session_history, status_line, state="PENSANDO"))
 
-                                    thinking_text.append(block["reasoning"])
-                                    live.update(block["reasoning"])
+                # Novas threads a cada turno: as do turno anterior já terminaram
+                # (elas retornam ao receberem STOP_SIGNAL e não podem ser reiniciadas)
+                tts_thread = threading.Thread(target=tts_worker, daemon=True)
+                playback_thread = threading.Thread(target=playback_worker, daemon=True)
+                tts_thread.start()
+                playback_thread.start()
 
-                            elif block["type"] == "text" and block.get("text"):
-                                piece = block["text"]
+                # Buffers e flags por turno: precisam ser resetados aqui, senão
+                # texto/frase do turno anterior vaza (fica grudado) no próximo.
+                text_buffer = ""
+                sentence_buffer = ""
+                printed_header_reasoning = False
+                printed_header_text = False
+                buffer_resposta = ""
+                thinking_text = Text()
 
-                                with print_lock:
-                                    if metadata["langgraph_node"] == "tools":
-                                        print("\nResposta da ferramenta:  \n")
-                                        print(piece, end="", flush=True)
-                                        printed_header_reasoning = False
-                                        printed_header_text = False
-                                        buffer_resposta = ""
-                                        continue
-                                    else:
-                                        if not printed_header_text:
-                                            print("\n\n💬 Resposta final:\n", flush=True)
-                                            printed_header_text = True
-                                        buffer_resposta += piece
-                                        live.update(Markdown(buffer_resposta, "dracula", justify="left", style="white on #323445"))
+                cpu_times = _cpu_times()
 
-                                text_buffer += piece
-                                sentence_buffer += piece
+                try:
+                        for chunk in agent.stream(
+                            {
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": user_input
+                                    }
+                                ]
+                            },
+                            config=config,
+                            stream_mode="messages",
+                            version="v2",
+                        ):
+                            chunk: dict[str, Any]
+                            token, metadata = chunk["data"]
+                            cpu_times = update_status_line(status_line, cpu_times)
+                            for block in token.content_blocks:
+                                if block["type"] == "reasoning":
+                                    with print_lock:
+                                        if not printed_header_reasoning:
+                                            session_history.append("\nRaciocínio\n", style="bold yellow")
+                                            live.update(session_view(session_history, status_line, state="PENSANDO"))
+                                            printed_header_reasoning = True
 
-                                ready, sentence_buffer = split_ready_sentences(sentence_buffer)
-                                for sentence in ready:
-                                    tts_queue.put(sentence)
+                                        session_history.append(block["reasoning"])
+                                        live.update(session_view(session_history, status_line, state="PENSANDO"))
+                                        live.refresh()
 
-                            elif block["type"] == "tool_call_chunk":
-                                if block["name"] != None:
-                                    print(f"🔧 Chamando a ferramenta: {block['name']}")
-                                elif block["args"] != '':
-                                    print(block['args'], end="", flush=True)
+                                elif block["type"] == "text" and block.get("text"):
+                                    piece = block["text"]
+                                    with print_lock:
+                                        if metadata["langgraph_node"] == "tools":
+                                            session_history.append("\nFerramenta\n", style="bold yellow")
+                                            session_history.append(piece + "\n")
+                                            live.update(session_view(session_history, status_line, state="PENSANDO"))
+                                            printed_header_reasoning = False
+                                            printed_header_text = False
+                                            buffer_resposta = ""
+                                            continue
+                                        else:
+                                            if not printed_header_text:
+                                                session_history.append("\nNexus\n", style="bold green")
+                                                printed_header_text = True
+                                            buffer_resposta += piece
+                                            live.update(session_view(
+                                                session_history,
+                                                status_line,
+                                                Markdown(buffer_resposta, justify="left"),
+                                                state="RESPONDENDO",
+                                            ))
+                                            live.refresh()
+                                    text_buffer += piece
+                                    sentence_buffer += piece
 
-            finally:
-                # Roda mesmo se o agent.stream() acima estourar uma exceção no
-                # meio do turno — sem isso, a tts_thread ficava presa pra
-                # sempre esperando STOP_SIGNAL numa tts_queue que ninguém mais
-                # ia alimentar, e o próximo turno criava uma 2ª thread lendo
-                # da mesma fila (dois consumidores brigando pelos itens).
+                                    ready, sentence_buffer = split_ready_sentences(sentence_buffer)
+                                    for sentence in ready:
+                                        tts_queue.put(sentence)
 
-                # Frase final sem pontuação (se sobrou algo no buffer)
-                if sentence_buffer.strip():
-                    tts_queue.put(sentence_buffer.strip())
+                                elif block["type"] == "tool_call_chunk":
+                                    if block["name"] != None:
+                                        session_history.append(f"\nFerramenta: {block['name']}\n", style="bold yellow")
+                                        live.update(session_view(session_history, status_line, state="PENSANDO"))
+                                    elif block["args"] != '':
+                                        session_history.append(block['args'])
+                                        live.update(session_view(session_history, status_line, state="PENSANDO"))
 
-                # Sinaliza fim do stream e espera o pipeline esvaziar
-                tts_queue.put(STOP_SIGNAL)
-                tts_thread.join()
-                playback_thread.join()
+                finally:
+                    # Roda mesmo se o agent.stream() acima estourar uma exceção no
+                    # meio do turno — sem isso, a tts_thread ficava presa pra
+                    # sempre esperando STOP_SIGNAL numa tts_queue que ninguém mais
+                    # ia alimentar, e o próximo turno criava uma 2ª thread lendo
+                    # da mesma fila (dois consumidores brigando pelos itens).
 
-                print()  # quebra de linha final
+                    # Frase final sem pontuação (se sobrou algo no buffer)
+                    if sentence_buffer.strip():
+                        tts_queue.put(sentence_buffer.strip())
 
-    except KeyboardInterrupt:
-        player.stop()
-        stream.stop_stream()
-        stream.close()
-        wake_stream.stop_stream()
-        wake_stream.close()
-        mic.terminate()
+                    # Sinaliza fim do stream e espera o pipeline esvaziar
+                    tts_queue.put(STOP_SIGNAL)
+                    tts_thread.join()
+                    playback_thread.join()
+
+                    print()  # quebra de linha final
+
+        except KeyboardInterrupt:
+            player.stop()
+            stream.stop_stream()
+            stream.close()
+            wake_stream.stop_stream()
+            wake_stream.close()
+            mic.terminate()
+        finally:
+            status_stop_event.set()
+            status_thread.join()
