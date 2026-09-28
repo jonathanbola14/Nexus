@@ -3,9 +3,8 @@ import importlib.util
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
 import pytest
-
+from PIL import Image
 
 module_path = Path(__file__).parents[1] / "tools" / "print.py"
 module_spec = importlib.util.spec_from_file_location("print_tool", module_path)

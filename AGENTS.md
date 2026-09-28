@@ -45,3 +45,5 @@ Streaming TTS pipeline: LLM tokens stream into `text_buffer` → `split_ready_se
 ## ⚠️ Security note
 
 `.env` contains a live `NVIDIA_API_KEY` and is **not** in `.gitignore` (only `.vscode`, `__pycache__`, `uv.lock` are). If this repo is or will be shared, rotate the key and add `.env` to `.gitignore` before committing further.
+
+

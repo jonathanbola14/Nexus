@@ -20,8 +20,8 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from LLM import Agent
-from STT import Speech_to_Text, load_stt_model
+from src.LLM import Agent
+from src.STT import Speech_to_Text, load_stt_model
 from utils.increase_gain import gain
 from utils.play_file import Play
 from utils.recorder import collect_speech_frames
