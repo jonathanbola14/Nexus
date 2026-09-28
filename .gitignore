@@ -9,3 +9,5 @@ nexus.egg-info/SOURCES.txt
 .gitignore
 nexus.egg-info/top_level.txt
 uv.lock
+test.py
+uv.lock
