@@ -13,3 +13,5 @@ test.py
 uv.lock
 AGENTS.md
 AGENTS.md
+.env
+audios/noise.wav

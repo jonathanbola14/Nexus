@@ -4,6 +4,8 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
+from utils.audio import resample_pcm16
+
 # from .increase_gain import gain
 
 vad = webrtcvad.Vad(2)
@@ -20,7 +22,14 @@ def _show_capture_status(live: Live, message: str, style: str):
     )
 
 
-def collect_speech_frames(stream: pyaudio.Stream, RATE: int, CHUNK: int, live: Live):
+def collect_speech_frames(
+    stream: pyaudio.Stream,
+    RATE: int,
+    CHUNK: int,
+    live: Live,
+    input_rate: int | None = None,
+):
+    input_rate = input_rate or RATE
     frames = []
     silence = 0
     has_speech = False
@@ -29,6 +38,7 @@ def collect_speech_frames(stream: pyaudio.Stream, RATE: int, CHUNK: int, live: L
 
     while True:
         frame = stream.read(num_frames=CHUNK, exception_on_overflow=False)
+        frame = resample_pcm16(frame, input_rate, RATE)
         # frame = gain(frame, ganho=1.5)
 
         if vad.is_speech(frame, RATE):

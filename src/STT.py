@@ -1,4 +1,5 @@
 import wave
+from pathlib import Path
 
 import noisereduce as nr
 import numpy as np
@@ -20,7 +21,13 @@ def load_stt_model():
             _stt_model = onnx_asr.load_model(
                 model="istupakov/parakeet-tdt-0.6b-v3-onnx",
             )
+
     return _stt_model
+
+
+def _audio_path(filename: str) -> str:
+    project_root = Path(__file__).resolve().parents[1]
+    return str(project_root / "audios" / filename)
 
 
 def Speech_to_Text(data: bytes, RATE: int, model=None):
@@ -30,7 +37,7 @@ def Speech_to_Text(data: bytes, RATE: int, model=None):
     # bytes -> numpy
     audio = np.frombuffer(buffer=data, dtype=np.int16).astype(np.float32)
 
-    with wave.open(f="audios/noise.wav", mode='rb') as f:
+    with wave.open(_audio_path("noise.wav"), mode='rb') as f:
         nframes = f.getnframes()
         ruido = f.readframes(nframes=max(0, nframes - 10))
 

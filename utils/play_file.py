@@ -9,8 +9,19 @@ class Play:
         self.p = pyaudio.PyAudio()
 
         self.format = self.p.get_format_from_width(2)
-        self.channels = 2
-        self.sample_rate = 16000
+
+        try:
+            device_info = self.p.get_default_output_device_info()
+        except Exception:
+            device_info = {}
+
+        default_sample_rate = int(device_info.get("defaultSampleRate", 48000))
+        default_channels = int(device_info.get("maxOutputChannels", 2) or 2)
+        if default_channels <= 0:
+            default_channels = 2
+
+        self.channels = default_channels
+        self.sample_rate = default_sample_rate
 
         self.file_path = ""
         self.wf: wave.Wave_read | None = None  # <-- tipo correto, não o módulo

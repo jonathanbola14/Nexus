@@ -9,13 +9,25 @@ def stub_module(monkeypatch, name, **attributes):
     module = types.ModuleType(name)
     for attribute, value in attributes.items():
         setattr(module, attribute, value)
-    if any(name.startswith(f"{prefix}.") for prefix in (
+
+    if any(name == prefix or name.startswith(f"{prefix}.") for prefix in (
         "deepagents",
         "langchain",
         "langchain_core",
         "langgraph",
     )):
         module.__path__ = []
+
+    package_name = name.rsplit(".", 1)[0] if "." in name else None
+    if package_name:
+        package = sys.modules.get(package_name)
+        if package is None:
+            package = types.ModuleType(package_name)
+            package.__path__ = []
+            monkeypatch.setitem(sys.modules, package_name, package)
+        elif not hasattr(package, "__path__"):
+            package.__path__ = []
+
     monkeypatch.setitem(sys.modules, name, module)
     return module
 
@@ -82,9 +94,10 @@ def load_llm_module(monkeypatch):
     tools_module = stub_module(monkeypatch, "tools")
     tools_module.data = object()
     tools_module.hora = object()
+    tools_module.print = object()
     tools_module.web_search = object()
 
-    module_path = Path(__file__).parents[1] / "LLM.py"
+    module_path = Path(__file__).parents[1] / "src" / "LLM.py"
     module_spec = importlib.util.spec_from_file_location("llm_agent_under_test", module_path)
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
@@ -95,6 +108,7 @@ def load_llm_module(monkeypatch):
         "chat_nvidia": chat_nvidia,
         "checkpointer": checkpointer,
         "create_deep_agent": create_deep_agent,
+        "dotenv_values": dotenv_values,
         "in_memory_saver": in_memory_saver,
         "store_instance": store_instance,
     }
@@ -102,24 +116,50 @@ def load_llm_module(monkeypatch):
 
 def test_agent_builds_model_and_graph_with_expected_tools(monkeypatch):
     module, dependencies = load_llm_module(monkeypatch)
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
 
     result = module.Agent()
 
     assert result is dependencies["agent_instance"]
     dependencies["chat_nvidia"].assert_called_once_with(
-        model="moonshotai/kimi-k3",
+        model="deepseek-ai/deepseek-v4.1-flash",
         api_key="test-key",
         temperature=1,
         max_tokens=16384,
         seed=42,
-        model_kwargs={"chat_template_kwargs": {"reasoning_effort": "high"}},
     )
     dependencies["in_memory_saver"].assert_called_once_with()
     dependencies["create_deep_agent"].assert_called_once()
 
     agent_arguments = dependencies["create_deep_agent"].call_args.kwargs
     assert agent_arguments["model"] is dependencies["chat_model"]
-    assert agent_arguments["tools"] == [module.hora, module.data, module.web_search]
+    assert agent_arguments["tools"] == [
+        module.hora,
+        module.data,
+        module.web_search,
+        module.print,
+    ]
     assert agent_arguments["checkpointer"] is dependencies["checkpointer"]
     assert agent_arguments["store"] is module.store
     assert agent_arguments["system_prompt"].content.startswith("Você é o Nexus")
+
+
+def test_nvidia_api_key_uses_environment_before_dotenv(monkeypatch):
+    module, dependencies = load_llm_module(monkeypatch)
+    monkeypatch.setenv("NVIDIA_API_KEY", "environment-key")
+
+    assert module._get_nvidia_api_key() == "environment-key"
+    dependencies["dotenv_values"].assert_not_called()
+
+
+def test_nvidia_api_key_reports_missing_configuration(monkeypatch):
+    module, dependencies = load_llm_module(monkeypatch)
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    dependencies["dotenv_values"].return_value = {}
+
+    try:
+        module._get_nvidia_api_key()
+    except RuntimeError as error:
+        assert "NVIDIA_API_KEY ausente" in str(error)
+    else:
+        raise AssertionError("Esperava erro quando a chave NVIDIA não está configurada")

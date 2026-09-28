@@ -8,5 +8,6 @@ webrtcvad
 langchain_nvidia_ai_endpoints
 langchain
 setuptools<81
+scipy>=1.10
 huggingface_hub
 kokoro

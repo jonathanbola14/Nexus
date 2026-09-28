@@ -2,6 +2,7 @@ import collections
 import os
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pyaudio
@@ -12,16 +13,26 @@ from rich.panel import Panel
 from rich.text import Text
 
 from utils.play_file import Play
+from utils.audio import resample_pcm16
 from utils.recorder import collect_speech_frames
 
+WAKEWORD_RATE = 16000
 
-def configWakeWord(mic: PyAudio, RATE: int, model_path="models/nexus.onnx", threshold=0.65):
+
+def configWakeWord(
+    mic: PyAudio,
+    RATE: int,
+    model_path="models/nexus.onnx",
+    threshold=0.65,
+    input_rate: int | None = None,
+):
+    input_rate = input_rate or RATE
     wake_stream = mic.open(
         format=pyaudio.paInt16,
         channels=1,
-        rate=RATE,
+        rate=input_rate,
         input=True,
-        frames_per_buffer=1280
+        frames_per_buffer=int(input_rate * 0.08)
     )
     # Predict continuously on audio stream
     last_save = time.time()
@@ -45,6 +56,11 @@ def configWakeWord(mic: PyAudio, RATE: int, model_path="models/nexus.onnx", thre
     return wake_stream, last_save, activation_times, save_delay, cooldown, owwModel
 
 
+def _audio_path(filename: str) -> str:
+    project_root = Path(__file__).resolve().parents[1]
+    return str(project_root / "audios" / filename)
+
+
 def WakeWord(
     wake_stream: pyaudio.Stream,
     RATE: int,
@@ -58,10 +74,19 @@ def WakeWord(
     player: Play,
     live: Live,
     threshold=0.65,
+    input_rate: int | None = None,
 ):
+    input_rate = input_rate or RATE
     # Get audio
     mic_audio = np.frombuffer(
-        buffer=wake_stream.read(num_frames=1280, exception_on_overflow=False),
+        buffer=resample_pcm16(
+            wake_stream.read(
+                num_frames=int(input_rate * 0.08),
+                exception_on_overflow=False,
+            ),
+            input_rate,
+            WAKEWORD_RATE,
+        ),
         dtype=np.int16,
     )
 
@@ -90,10 +115,12 @@ def WakeWord(
             # Reusa o player global (instanciado uma vez em main.py) em vez de
             # criar um novo Play() — cada Play() abre um PyAudio() + output
             # stream e nunca os fecharíamos, vazando recursos a cada wake word.
-            player.file(file=os.path.join(os.path.dirname(__file__), 'audios', 'activation.wav'))
+            player.file(file=_audio_path("activation.wav"))
             time.sleep(0.15)
 
-            audio = collect_speech_frames(stream, RATE, CHUNK, live)
+            audio = collect_speech_frames(
+                stream, RATE, CHUNK, live, input_rate=input_rate
+            )
 
             # Evita reativação: drena frames acumulados no wake_stream durante a fala
             wake_stream.read(num_frames=wake_stream.get_read_available(), exception_on_overflow=False)

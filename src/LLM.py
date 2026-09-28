@@ -1,3 +1,7 @@
+
+import os
+from pathlib import Path
+
 import dotenv
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
@@ -9,30 +13,45 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 
-from tools import data, hora, web_search
+from tools import data, hora, print, web_search
 
-backend = FilesystemBackend()
+home = str(Path.home)
+
+backend = FilesystemBackend(root_dir=home)
 middlewares = [
     MemoryMiddleware(backend=backend, sources=["/memories/AGENTS.md"]),
-    ShellToolMiddleware(backend=backend),
-    TodoListMiddleware(backend=backend)
+    ShellToolMiddleware(),
+    TodoListMiddleware()
     ]
 
 store = InMemoryStore()
 
+
+def _get_nvidia_api_key():
+    project_env = Path(__file__).resolve().parents[1] / ".env"
+    api_key = os.getenv("NVIDIA_API_KEY") or dotenv.dotenv_values(project_env).get(
+        "NVIDIA_API_KEY"
+    )
+    if not api_key:
+        raise RuntimeError(
+            "Chave NVIDIA_API_KEY ausente. Configure-a no ambiente ou no arquivo .env da raiz do projeto."
+        )
+    return api_key
+
+
 def Agent():
     llm = ChatNVIDIA(
-        model="moonshotai/kimi-k3",
-        api_key=dotenv.dotenv_values().get("NVIDIA_API_KEY"),
+        model="deepseek-ai/deepseek-v4.1-flash",
+        api_key=_get_nvidia_api_key(),
         temperature=1,
         max_tokens=16384,
         seed=42,
-        model_kwargs={"chat_template_kwargs": {"reasoning_effort": "high"}},
+        #model_kwargs={"chat_template_kwargs": {"reasoning_effort": "high"}},
     )
 
     agent: Runnable = create_deep_agent(
         model=llm,
-        tools=[hora, data, web_search],
+        tools=[hora, data, web_search, print],
         checkpointer=InMemorySaver(),
         store=store,
         middleware=middlewares,
@@ -50,17 +69,6 @@ def Agent():
 - Não anuncie o que vai fazer antes de fazer; faça e depois informe concisamente o resultado.
 - Se não souber algo, diga "Não sei" ou "Não tenho essa informação" e, se relevante, use a busca web.
 - Confirme ações significativas (ex.: criar/editar/arquivo) com UMA frase curta depois de executá-la, não antes.
-
-# Raciocínio (thinking)
-- Você tem modo de raciocínio ativo. Use-o para planejar chamadas de ferramenta e a resposta.
-- O raciocínio é exibido na tela do usuário, mas NÃO é falado pelo TTS. Mesmo assim, mantenha-o em pt-BR e útil.
-- NUNCA coloque conteúdo do raciocínio dentro do bloco de texto da resposta final — o usuário ouviria tudo duas vezes.
-
-# Ferramentas disponíveis
-- `Hour`: hora atual (formato HH:MM:SS).
-- `Date`: data atual (dd/mm/aaaa + dia da semana por extenso).
-- `web_search`: busca livre na internet via Firecrawl. Use quando precisar de informação corrente que você não domina. Resuma os resultados oralmente; não leia URLs cruas em voz alta.
-- As ferramentas de filesystem (`ls`, `read_file`, `write_file`, `edit_file`, `grep`, `glob`, `delete`) já são injetadas pelo middleware deepagents. Para persistir algo que aprendeu com o usuário, edite um arquivo de memória (ex.: AGENTS.md dentro do escopo permitido) em vez de guardar tudo no seu próprio contexto.
 
 # Fluxo preferido
 1. Pense brevemente para decidir se precisa de ferramenta.

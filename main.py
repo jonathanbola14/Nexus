@@ -1,10 +1,10 @@
 import argparse
-import os
 import queue
 import re
 import threading
 import time
 import wave
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -22,10 +22,11 @@ from rich.text import Text
 
 from src.LLM import Agent
 from src.STT import Speech_to_Text, load_stt_model
+from src.WakeWord import WakeWord, configWakeWord
+from utils.audio import resample_pcm16
 from utils.increase_gain import gain
 from utils.play_file import Play
 from utils.recorder import collect_speech_frames
-from WakeWord import WakeWord, configWakeWord
 
 torch.set_num_threads(10)
 player = Play()
@@ -159,7 +160,7 @@ def split_ready_sentences(buffer):
 
 
 SAMPLE_RATE = 24000
-PREBUFFER_SIZE = 2  # quantas frases sintetizadas esperar antes de começar a tocar
+PREBUFFER_SIZE = 1  # quantas frases sintetizadas esperar antes de começar a tocar
 
 tts_queue = queue.Queue()
 playback_queue = queue.Queue()
@@ -167,12 +168,16 @@ playback_queue = queue.Queue()
 STOP_SIGNAL = object()
 
 RATE = 16000
-CHUNK = int(RATE * 30 / 1000)
-
 mic = pyaudio.PyAudio()
+INPUT_RATE = int(mic.get_default_input_device_info()["defaultSampleRate"])
+CHUNK = int(INPUT_RATE * 30 / 1000)
 
 stream = mic.open(
-    format=pyaudio.paInt16, channels=1, rate=RATE, input=True, frames_per_buffer=CHUNK
+    format=pyaudio.paInt16,
+    channels=1,
+    rate=INPUT_RATE,
+    input=True,
+    frames_per_buffer=CHUNK,
 )
 
 def tts_worker():
@@ -221,7 +226,7 @@ def playback_worker():
         player.tensor(audio, samplerate=SAMPLE_RATE)
 
 
-def load_models(load_state, use_wake_word):
+def _load_models(load_state, use_wake_word):
     """Carrega os modelos em uma thread separada e atualiza o progresso."""
     def set_progress(percent, message):
         with load_state["lock"]:
@@ -236,7 +241,9 @@ def load_models(load_state, use_wake_word):
 
     if use_wake_word:
         set_progress(70, "Carregando palavra de ativação")
-        loaded_wake_data = configWakeWord(mic=mic, RATE=RATE, threshold=0.75)
+        loaded_wake_data = configWakeWord(
+            mic=mic, RATE=RATE, threshold=0.75, input_rate=INPUT_RATE
+        )
     else:
         set_progress(70, "Modo sem palavra de ativação")
         loaded_wake_data = None
@@ -255,7 +262,18 @@ def load_models(load_state, use_wake_word):
         load_state["message"] = "Modelos carregados"
 
 
+def load_models(load_state, use_wake_word):
+    try:
+        _load_models(load_state, use_wake_word)
+    except Exception as error:
+        with load_state["lock"]:
+            load_state["error"] = error
+            load_state["message"] = "Falha ao carregar modelos"
+
+
 # Run capture loop, checking for hotwords
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Assistente de voz Nexus")
     parser.add_argument(
@@ -271,19 +289,30 @@ if __name__ == "__main__":
         "percent": 0,
         "message": "Iniciando",
         "result": None,
+        "error": None,
     }
 
-    if not os.path.exists(path="audios/noise.wav"):
+    noise_path = PROJECT_ROOT / "audios" / "noise.wav"
+    beep_path = PROJECT_ROOT / "audios" / "beep.wav"
+
+    if not noise_path.exists():
         print("ruido nao coletado")
         time.sleep(0.5)
         print("fique em silencio ate voce escutar um bipe")
-        ruido = stream.read(num_frames=int(RATE * 3.5), exception_on_overflow=False)
-        with wave.open(f="audios/noise.wav", mode="w") as f:
+        ruido = resample_pcm16(
+            stream.read(
+                num_frames=int(INPUT_RATE * 3.5),
+                exception_on_overflow=False,
+            ),
+            INPUT_RATE,
+            RATE,
+        )
+        with wave.open(str(noise_path), mode="w") as f:
             f.setframerate(framerate=16000)
             f.setnchannels(nchannels=1)
             f.setsampwidth(sampwidth=2)
             f.writeframes(data=gain(frame=ruido, ganho=2.0))
-        player.file(file="audios/beep.wav")
+        player.file(file=str(beep_path))
 
     loader_thread = threading.Thread(
         target=load_models,
@@ -326,6 +355,14 @@ if __name__ == "__main__":
             live.update(Group(loading_panel, status_line))
             time.sleep(0.1)
         loader_thread.join()
+        if load_state["error"] is not None:
+            status_stop_event.set()
+            status_thread.join()
+            error = load_state["error"]
+            console.print(
+                f"[bold red]Falha ao iniciar o Nexus:[/bold red] {error}"
+            )
+            raise SystemExit(1)
         pipeline, stt_model, wake_data, agent = load_state["result"]
         if use_wake_word:
             wake_stream, last_save, activation_times, save_delay, cooldown, owwModel = wake_data
@@ -349,17 +386,20 @@ if __name__ == "__main__":
                         cooldown,
                         save_delay,
                         player,
-                        live
+                        live,
+                        input_rate=INPUT_RATE,
                     )
                 else:
-                    audio = collect_speech_frames(stream, RATE, CHUNK, live)
+                    audio = collect_speech_frames(
+                        stream, RATE, CHUNK, live, input_rate=INPUT_RATE
+                    )
 
                 if not audio:
                     continue
 
                 user_input = Speech_to_Text(data=audio, RATE=RATE, model=stt_model)
 
-                if user_input == "Desligar":
+                if user_input in ("Desligar.", "Desligar", "Encerrar", "Encerrar.", "Desliga.", "Desliga"):
                     break
 
                 session_history.append("Você\n", style="bold cyan")
@@ -448,6 +488,28 @@ if __name__ == "__main__":
                             elif block["type"] == "tool_call_chunk":
                                 continue
 
+                except Exception:
+                    fallback = (
+                        "Não consegui acessar o serviço de inteligência agora. "
+                        "Verifique a chave da API e a conexão com a internet e tente novamente."
+                    )
+                    with print_lock:
+                        if not printed_header_text:
+                            session_history.append("\nNexus\n", style="bold green")
+                            printed_header_text = True
+                        buffer_resposta += (
+                            "\n\n" if buffer_resposta else ""
+                        ) + fallback
+                        sentence_buffer += " " + fallback
+                        live.update(session_view(
+                            session_history,
+                            status_line,
+                            Markdown(buffer_resposta, justify="left"),
+                            state="ERRO",
+                            reasoning=buffer_raciocinio,
+                        ))
+                        live.refresh()
+
                 finally:
                     # Roda mesmo se o agent.stream() acima estourar uma exceção no
                     # meio do turno — sem isso, a tts_thread ficava presa pra
@@ -471,8 +533,6 @@ if __name__ == "__main__":
                         status_line,
                         reasoning=buffer_raciocinio,
                     ))
-
-                    print()  # quebra de linha final
 
         except KeyboardInterrupt:
             player.stop()
