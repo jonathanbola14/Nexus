@@ -86,7 +86,7 @@ def status_worker(status_line, stop_event):
             cpu_times = update_status_line(status_line, cpu_times)
 
 
-def session_view(session_history, status_line, response=None, state="OUVINDO"):
+def session_view(session_history, status_line, response=None, state="OUVINDO", reasoning=None):
     title = Text()
     title.append(" NEXUS ", style="bold green")
     title.append("/", style="dim")
@@ -95,6 +95,13 @@ def session_view(session_history, status_line, response=None, state="OUVINDO"):
     content = [session_history] if session_history.plain else [
         Text("Aguardando a palavra de ativação.", style="dim")
     ]
+    if reasoning:
+        content.append(Panel(
+            Markdown(reasoning, justify="left"),
+            title="[bold yellow]RACIOCÍNIO[/bold yellow]",
+            border_style="yellow",
+            padding=(0, 1),
+        ))
     if response is not None:
         content.append(response)
 
@@ -351,6 +358,10 @@ if __name__ == "__main__":
                     continue
 
                 user_input = Speech_to_Text(data=audio, RATE=RATE, model=stt_model)
+
+                if user_input == "Desligar":
+                    break
+
                 session_history.append("Você\n", style="bold cyan")
                 session_history.append(f"{user_input}\n\n", style="white")
                 live.update(session_view(session_history, status_line, state="PENSANDO"))
@@ -369,60 +380,73 @@ if __name__ == "__main__":
                 printed_header_reasoning = False
                 printed_header_text = False
                 buffer_resposta = ""
-                thinking_text = Text()
+                buffer_raciocinio = ""
 
                 cpu_times = _cpu_times()
 
                 try:
-                        for chunk in agent.stream(
-                            {
-                                "messages": [
-                                    {
-                                        "role": "user",
-                                        "content": user_input
-                                    }
-                                ]
-                            },
-                            config=config,
-                            stream_mode="messages",
-                            version="v2",
-                        ):
-                            chunk: dict[str, Any]
-                            token, metadata = chunk["data"]
-                            cpu_times = update_status_line(status_line, cpu_times)
-                            for block in token.content_blocks:
-                                if block["type"] == "reasoning":
-                                    continue
-
-                                elif block["type"] == "text" and block.get("text"):
-                                    piece = block["text"]
+                    for chunk in agent.stream(
+                        {
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": user_input
+                                }
+                            ]
+                        },
+                        config=config,
+                        stream_mode="messages",
+                        version="v2",
+                    ):
+                        chunk: dict[str, Any]
+                        token, metadata = chunk["data"]
+                        cpu_times = update_status_line(status_line, cpu_times)
+                        for block in token.content_blocks:
+                            if block["type"] == "reasoning":
+                                piece = block.get("reasoning") or block.get("text", "")
+                                if piece:
                                     with print_lock:
-                                        if metadata["langgraph_node"] == "tools":
-                                            printed_header_reasoning = False
-                                            printed_header_text = False
-                                            buffer_resposta = ""
-                                            continue
-                                        else:
-                                            if not printed_header_text:
-                                                session_history.append("\nNexus\n", style="bold green")
-                                                printed_header_text = True
-                                            buffer_resposta += piece
-                                            live.update(session_view(
-                                                session_history,
-                                                status_line,
-                                                Markdown(buffer_resposta, justify="left"),
-                                                state="RESPONDENDO",
-                                            ))
-                                            live.refresh()
-                                    text_buffer += piece
-                                    sentence_buffer += piece
+                                        buffer_raciocinio += piece
+                                        live.update(session_view(
+                                            session_history,
+                                            status_line,
+                                            Markdown(buffer_resposta, justify="left") if buffer_resposta else None,
+                                            state="RACIOCINANDO",
+                                            reasoning=buffer_raciocinio,
+                                        ))
+                                        live.refresh()
+                                continue
 
-                                    ready, sentence_buffer = split_ready_sentences(sentence_buffer)
-                                    for sentence in ready:
-                                        tts_queue.put(sentence)
+                            elif block["type"] == "text" and block.get("text"):
+                                piece = block["text"]
+                                with print_lock:
+                                    if metadata["langgraph_node"] == "tools":
+                                        printed_header_reasoning = False
+                                        printed_header_text = False
+                                        buffer_resposta = ""
+                                        continue
+                                    else:
+                                        if not printed_header_text:
+                                            session_history.append("\nNexus\n", style="bold green")
+                                            printed_header_text = True
+                                        buffer_resposta += piece
+                                        live.update(session_view(
+                                            session_history,
+                                            status_line,
+                                            Markdown(buffer_resposta, justify="left"),
+                                            state="RESPONDENDO",
+                                            reasoning=buffer_raciocinio,
+                                        ))
+                                        live.refresh()
+                                text_buffer += piece
+                                sentence_buffer += piece
 
-                                elif block["type"] == "tool_call_chunk":
-                                    continue
+                                ready, sentence_buffer = split_ready_sentences(sentence_buffer)
+                                for sentence in ready:
+                                    tts_queue.put(sentence)
+
+                            elif block["type"] == "tool_call_chunk":
+                                continue
 
                 finally:
                     # Roda mesmo se o agent.stream() acima estourar uma exceção no
@@ -442,7 +466,11 @@ if __name__ == "__main__":
 
                     if buffer_resposta.strip():
                         session_history.append(buffer_resposta.strip() + "\n\n")
-                    live.update(session_view(session_history, status_line))
+                    live.update(session_view(
+                        session_history,
+                        status_line,
+                        reasoning=buffer_raciocinio,
+                    ))
 
                     print()  # quebra de linha final
 

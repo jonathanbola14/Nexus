@@ -2,3 +2,10 @@
 __pycache__
 uv.lock
 audios/noise.wav
+uv.lock
+nexus.egg-info/dependency_links.txt
+nexus.egg-info/PKG-INFO
+nexus.egg-info/SOURCES.txt
+.gitignore
+nexus.egg-info/top_level.txt
+uv.lock

@@ -1,62 +1,38 @@
-from datetime import datetime
-
 import dotenv
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware.memory import MemoryMiddleware
-from firecrawl.v2 import FirecrawlClient
+from langchain.agents.middleware import ShellToolMiddleware, TodoListMiddleware
 from langchain.messages import SystemMessage
-from langchain.tools import tool
 from langchain_core.runnables import Runnable
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 
+from tools import data, hora, web_search
+
 backend = FilesystemBackend()
-middlewares = [MemoryMiddleware(backend=backend, sources=["/memories/AGENTS.md"])]
+middlewares = [
+    MemoryMiddleware(backend=backend, sources=["/memories/AGENTS.md"]),
+    ShellToolMiddleware(backend=backend),
+    TodoListMiddleware(backend=backend)
+    ]
 
 store = InMemoryStore()
 
-@tool(name_or_callable="Hour", description="Pegar a hora atual")
-def hora():
-    return datetime.now().strftime("%H:%M:%S")
-
-@tool(name_or_callable="Date", description="Pegar a data atual")
-def data():
-    dias = [
-    "segunda-feira",
-    "terça-feira",
-    "quarta-feira",
-    "quinta-feira",
-    "sexta-feira",
-    "sábado",
-    "domingo"
-    ]
-
-    agora = datetime.now()
-
-    return agora.strftime("%d/%m/%Y"), dias[agora.weekday()]
-
-@tool("web_seach", description="pesquise na internet, de forma livre")
-def web_seach(query: str, limit: int = 10):
-    firecrawl = FirecrawlClient()
-    search = firecrawl.search(query, limit=limit+limit)
-    return search.web
-
 def Agent():
     llm = ChatNVIDIA(
-        model="nvidia/nemotron-3-ultra-550b-a55b",
+        model="moonshotai/kimi-k3",
         api_key=dotenv.dotenv_values().get("NVIDIA_API_KEY"),
         temperature=1,
-        top_p=1,
         max_tokens=16384,
         seed=42,
-        model_kwargs={"chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "medium"}},
+        model_kwargs={"chat_template_kwargs": {"reasoning_effort": "high"}},
     )
 
     agent: Runnable = create_deep_agent(
         model=llm,
-        tools=[hora, data],
+        tools=[hora, data, web_search],
         checkpointer=InMemorySaver(),
         store=store,
         middleware=middlewares,
