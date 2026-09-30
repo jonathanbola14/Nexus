@@ -1,8 +1,8 @@
 import numpy as np
 
-from utils.increase_gain import gain
-from utils.audio import resample_pcm16
-from utils.play_file import Play
+from src.utils.increase_gain import gain
+from src.utils.audio import resample_pcm16
+from src.utils.play_file import Play
 
 
 def test_play_uses_default_output_sample_rate(monkeypatch):
@@ -26,7 +26,7 @@ def test_play_uses_default_output_sample_rate(monkeypatch):
             opened.update(kwargs)
             return DummyStream()
 
-    monkeypatch.setattr("utils.play_file.pyaudio.PyAudio", DummyPyAudio)
+    monkeypatch.setattr("src.utils.play_file.pyaudio.PyAudio", DummyPyAudio)
 
     player = Play()
 

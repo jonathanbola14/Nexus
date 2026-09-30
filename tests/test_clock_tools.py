@@ -9,7 +9,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def load_tool_module(name, filename):
-    module_path = ROOT / "tools" / filename
+    module_path = ROOT / "src" / "tools" / filename
     module_spec = importlib.util.spec_from_file_location(name, module_path)
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)

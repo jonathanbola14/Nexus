@@ -1,9 +1,9 @@
 from importlib import import_module
 
-from tools.data import data
-from tools.hora import hora
-from tools.print import print
-from tools.web_search import web_search
+from .data import data
+from .hora import hora
+from .print import print
+from .web_search import web_search
 
 __all__ = ["click", "data", "drag", "hora", "move", "print", "scroll", "web_search"]
 

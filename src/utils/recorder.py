@@ -4,7 +4,7 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from utils.audio import resample_pcm16
+from src.utils.audio import resample_pcm16
 
 # from .increase_gain import gain
 
@@ -12,6 +12,13 @@ vad = webrtcvad.Vad(2)
 
 
 def _show_capture_status(live: Live, message: str, style: str):
+    if getattr(live, "_is_textual_bridge", False) is True:
+        state = "CAPTURANDO" if style == "bold green" else "OUVINDO"
+        if "Transcrevendo" in message:
+            state = "PENSANDO"
+        live.set_status(message, state)
+        return
+
     live.update(
         Panel(
             Text(message, style=style),

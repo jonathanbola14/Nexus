@@ -12,28 +12,21 @@ import pyaudio
 import torch
 from kokoro import KPipeline
 from langchain_core.runnables import RunnableConfig
-from rich import print
-from rich.align import Align
-from rich.console import Console, Group
-from rich.live import Live
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.text import Text
+from textual.app import App
 
 from src.LLM import Agent
 from src.STT import Speech_to_Text, load_stt_model
+from src.terminal_ui import NexusApp
+from src.utils.audio import resample_pcm16
+from src.utils.increase_gain import gain
+from src.utils.play_file import Play
+from src.utils.recorder import collect_speech_frames
 from src.WakeWord import WakeWord, configWakeWord
-from utils.audio import resample_pcm16
-from utils.increase_gain import gain
-from utils.play_file import Play
-from utils.recorder import collect_speech_frames
 
 torch.set_num_threads(10)
 player = Play()
 
-console = Console()
-
-print_lock = threading.Lock()
+pipeline = None
 
 SENTENCE_END_RE = re.compile(r'([.!?]+)(\s+|$)')
 
@@ -67,54 +60,14 @@ def system_status(previous_cpu_times):
     memory_percent = (
         (memory["MemTotal"] - memory["MemAvailable"]) / memory["MemTotal"] * 100
     )
-    status = Text(
-        f"CPU {cpu_percent:5.1f}%   MEM {memory_percent:5.1f}%",
-        style="dim cyan",
-    )
-    return current_cpu_times, Align(status, align="right")
+    return current_cpu_times, f"CPU {cpu_percent:5.1f}%   MEM {memory_percent:5.1f}%"
 
 
-def update_status_line(status_line, previous_cpu_times):
-    current_cpu_times, new_status_line = system_status(previous_cpu_times)
-    status_line.renderable = new_status_line.renderable
-    return current_cpu_times
-
-
-def status_worker(status_line, stop_event):
+def status_worker(app, stop_event):
     cpu_times = _cpu_times()
     while not stop_event.wait(0.3):
-        with print_lock:
-            cpu_times = update_status_line(status_line, cpu_times)
-
-
-def session_view(session_history, status_line, response=None, state="OUVINDO", reasoning=None):
-    title = Text()
-    title.append(" NEXUS ", style="bold green")
-    title.append("/", style="dim")
-    title.append(f" {state} ", style="bold white")
-
-    content = [session_history] if session_history.plain else [
-        Text("Aguardando a palavra de ativação.", style="dim")
-    ]
-    if reasoning:
-        content.append(Panel(
-            Markdown(reasoning, justify="left"),
-            title="[bold yellow]RACIOCÍNIO[/bold yellow]",
-            border_style="yellow",
-            padding=(0, 1),
-        ))
-    if response is not None:
-        content.append(response)
-
-    return Group(
-        Panel(
-            Group(*content),
-            title=title,
-            border_style="green",
-            padding=(1, 2),
-        ),
-        status_line,
-    )
+        cpu_times, metrics = system_status(cpu_times)
+        app.publish_metrics(metrics)
 
 
 def _is_real_sentence_end(buffer, match):
@@ -271,19 +224,10 @@ def load_models(load_state, use_wake_word):
             load_state["message"] = "Falha ao carregar modelos"
 
 
-# Run capture loop, checking for hotwords
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Assistente de voz Nexus")
-    parser.add_argument(
-        "--sem-ativacao",
-        action="store_true",
-        help="Captura a fala diretamente, sem exigir a palavra de ativação",
-    )
-    args = parser.parse_args()
-    use_wake_word = not args.sem_ativacao
-
+def run_assistant(app: App, use_wake_word: bool):
+    global pipeline
     load_state = {
         "lock": threading.Lock(),
         "percent": 0,
@@ -294,254 +238,224 @@ if __name__ == "__main__":
 
     noise_path = PROJECT_ROOT / "audios" / "noise.wav"
     beep_path = PROJECT_ROOT / "audios" / "beep.wav"
-
-    if not noise_path.exists():
-        print("ruido nao coletado")
-        time.sleep(0.5)
-        print("fique em silencio ate voce escutar um bipe")
-        ruido = resample_pcm16(
-            stream.read(
-                num_frames=int(INPUT_RATE * 3.5),
-                exception_on_overflow=False,
-            ),
-            INPUT_RATE,
-            RATE,
-        )
-        with wave.open(str(noise_path), mode="w") as f:
-            f.setframerate(framerate=16000)
-            f.setnchannels(nchannels=1)
-            f.setsampwidth(sampwidth=2)
-            f.writeframes(data=gain(frame=ruido, ganho=2.0))
-        player.file(file=str(beep_path))
-
+    status_stop_event = threading.Event()
+    status_thread = threading.Thread(
+        target=status_worker,
+        args=(app, status_stop_event),
+        daemon=True,
+    )
     loader_thread = threading.Thread(
         target=load_models,
         args=(load_state, use_wake_word),
     )
+    wake_stream = None
+    close_app = True
 
-    config: RunnableConfig = {
-        "configurable": {
-            "thread_id": "nexus"
-        }
-    }
+    def stop_audio():
+        player.stop()
+        stream.stop_stream()
 
+    app.shutdown_callback = stop_audio
+    status_thread.start()
 
-    with Live(console=console, refresh_per_second=30, screen=True) as live:
-        _, status_line = system_status(_cpu_times())
-        status_stop_event = threading.Event()
-        status_thread = threading.Thread(
-            target=status_worker,
-            args=(status_line, status_stop_event),
-            daemon=True,
-        )
-        status_thread.start()
+    try:
+        if not noise_path.exists():
+            app.set_status("Fique em silêncio para calibrar o microfone", "INICIALIZAÇÃO")
+            time.sleep(0.5)
+            ruido = resample_pcm16(
+                stream.read(
+                    num_frames=int(INPUT_RATE * 3.5),
+                    exception_on_overflow=False,
+                ),
+                INPUT_RATE,
+                RATE,
+            )
+            with wave.open(str(noise_path), mode="w") as noise_file:
+                noise_file.setframerate(16000)
+                noise_file.setnchannels(1)
+                noise_file.setsampwidth(2)
+                noise_file.writeframes(data=gain(frame=ruido, ganho=2.0))
+            player.file(file=str(beep_path))
+
+        config: RunnableConfig = {"configurable": {"thread_id": "nexus"}}
         loader_thread.start()
-        cpu_times = _cpu_times()
         while loader_thread.is_alive():
             with load_state["lock"]:
                 percent = load_state["percent"]
                 message = load_state["message"]
-            cpu_times = update_status_line(status_line, cpu_times)
-            filled = percent // 5
-            loading_panel = Panel(
-                Group(
-                    Text(message, style="bold white"),
-                    Text(f"[{'#' * filled}{'-' * (20 - filled)}] {percent:3d}%", style="green"),
-                ),
-                title="[bold green] NEXUS [/bold green] [dim]/[/dim] [bold]INICIALIZAÇÃO[/bold]",
-                border_style="green",
-                padding=(1, 2),
-            )
-            live.update(Group(loading_panel, status_line))
+            app.publish_progress(percent, message)
             time.sleep(0.1)
         loader_thread.join()
+
         if load_state["error"] is not None:
-            status_stop_event.set()
-            status_thread.join()
-            error = load_state["error"]
-            console.print(
-                f"[bold red]Falha ao iniciar o Nexus:[/bold red] {error}"
-            )
-            raise SystemExit(1)
+            app.set_status(f"Falha ao iniciar: {load_state['error']}", "ERRO")
+            close_app = False
+            return
+
         pipeline, stt_model, wake_data, agent = load_state["result"]
+        app.clear_progress()
         if use_wake_word:
             wake_stream, last_save, activation_times, save_delay, cooldown, owwModel = wake_data
         else:
-            wake_stream = None
-        session_history = Text()
-        live.update(session_view(session_history, status_line))
-        time.sleep(0.15)
+            last_save = activation_times = save_delay = cooldown = owwModel = None
 
+        session_history = ""
+        app.publish_session("Aguardando a palavra de ativação.", "OUVINDO")
+
+        while not app.stop_requested.is_set():
+            if use_wake_word:
+                audio, last_save, activation_times = WakeWord(
+                    wake_stream,
+                    RATE,
+                    CHUNK,
+                    stream,
+                    owwModel,
+                    activation_times,
+                    last_save,
+                    cooldown,
+                    save_delay,
+                    player,
+                    app,
+                    input_rate=INPUT_RATE,
+                )
+            else:
+                audio = collect_speech_frames(
+                    stream, RATE, CHUNK, app, input_rate=INPUT_RATE
+                )
+
+            if not audio or app.stop_requested.is_set():
+                continue
+
+            user_input = Speech_to_Text(data=audio, RATE=RATE, model=stt_model)
+            if user_input in (
+                "Desligar.", "Desligar", "Encerrar", "Encerrar.", "Desliga.", "Desliga"
+            ):
+                app._shutdown()
+
+            session_history += f"Você\n{user_input}\n\n"
+            app.publish_session(session_history, "PENSANDO")
+
+            tts_thread = threading.Thread(target=tts_worker, daemon=True)
+            playback_thread = threading.Thread(target=playback_worker, daemon=True)
+            tts_thread.start()
+            playback_thread.start()
+
+            sentence_buffer = ""
+            buffer_resposta = ""
+            buffer_raciocinio = ""
+            cpu_times = _cpu_times()
+
+            try:
+                for chunk in agent.stream(
+                    {"messages": [{"role": "user", "content": user_input}]},
+                    config=config,
+                    stream_mode="messages",
+                    version="v2",
+                ):
+                    chunk: dict[str, Any]
+                    token, metadata = chunk["data"]
+                    cpu_times, metrics = system_status(cpu_times)
+                    app.publish_metrics(metrics)
+
+                    for block in token.content_blocks:
+                        if block["type"] == "reasoning":
+                            piece = block.get("reasoning") or block.get("text", "")
+                            if piece:
+                                buffer_raciocinio += piece
+                                transcript = session_history + "Nexus\n"
+                                app.publish_session(
+                                    transcript,
+                                    "RACIOCINANDO",
+                                    response=buffer_resposta,
+                                    reasoning=buffer_raciocinio,
+                                )
+                            continue
+
+                        if block["type"] == "text" and block.get("text"):
+                            piece = block["text"]
+                            if metadata["langgraph_node"] == "tools":
+                                buffer_resposta = ""
+                                continue
+
+                            buffer_resposta += piece
+                            app.publish_session(
+                                session_history + "Nexus\n",
+                                "RESPONDENDO",
+                                response=buffer_resposta,
+                                reasoning=buffer_raciocinio,
+                            )
+                            sentence_buffer += piece
+                            ready, sentence_buffer = split_ready_sentences(sentence_buffer)
+                            for sentence in ready:
+                                tts_queue.put(sentence)
+
+            except Exception:
+                fallback = (
+                    "Não consegui acessar o serviço de inteligência agora. "
+                    "Verifique a chave da API e a conexão com a internet e tente novamente."
+                )
+                buffer_resposta += ("\n\n" if buffer_resposta else "") + fallback
+                sentence_buffer += " " + fallback
+                app.publish_session(
+                    session_history + "Nexus\n",
+                    "ERRO",
+                    response=buffer_resposta,
+                    reasoning=buffer_raciocinio,
+                )
+
+            finally:
+                if sentence_buffer.strip():
+                    tts_queue.put(sentence_buffer.strip())
+                tts_queue.put(STOP_SIGNAL)
+                tts_thread.join()
+                playback_thread.join()
+
+                if buffer_resposta.strip():
+                    session_history += f"Nexus\n{buffer_resposta.strip()}\n\n"
+                app.publish_session(session_history, "OUVINDO")
+
+    except KeyboardInterrupt:
+        app.stop_requested.set()
+    except OSError as error:
+        if app.stop_requested.is_set():
+            close_app = True
+        else:
+            app.set_status(f"Falha de áudio: {error}", "ERRO")
+            close_app = False
+    except Exception as error:
+        app.set_status(f"Falha no assistente: {error}", "ERRO")
+        close_app = False
+    finally:
+        status_stop_event.set()
+        status_thread.join()
+        player.stop()
         try:
-            while True:
-                if use_wake_word:
-                    audio, last_save, activation_times = WakeWord(
-                        wake_stream,
-                        RATE,
-                        CHUNK,
-                        stream,
-                        owwModel,
-                        activation_times,
-                        last_save,
-                        cooldown,
-                        save_delay,
-                        player,
-                        live,
-                        input_rate=INPUT_RATE,
-                    )
-                else:
-                    audio = collect_speech_frames(
-                        stream, RATE, CHUNK, live, input_rate=INPUT_RATE
-                    )
-
-                if not audio:
-                    continue
-
-                user_input = Speech_to_Text(data=audio, RATE=RATE, model=stt_model)
-
-                if user_input in ("Desligar.", "Desligar", "Encerrar", "Encerrar.", "Desliga.", "Desliga"):
-                    break
-
-                session_history.append("Você\n", style="bold cyan")
-                session_history.append(f"{user_input}\n\n", style="white")
-                live.update(session_view(session_history, status_line, state="PENSANDO"))
-
-                # Novas threads a cada turno: as do turno anterior já terminaram
-                # (elas retornam ao receberem STOP_SIGNAL e não podem ser reiniciadas)
-                tts_thread = threading.Thread(target=tts_worker, daemon=True)
-                playback_thread = threading.Thread(target=playback_worker, daemon=True)
-                tts_thread.start()
-                playback_thread.start()
-
-                # Buffers e flags por turno: precisam ser resetados aqui, senão
-                # texto/frase do turno anterior vaza (fica grudado) no próximo.
-                text_buffer = ""
-                sentence_buffer = ""
-                printed_header_reasoning = False
-                printed_header_text = False
-                buffer_resposta = ""
-                buffer_raciocinio = ""
-
-                cpu_times = _cpu_times()
-
-                try:
-                    for chunk in agent.stream(
-                        {
-                            "messages": [
-                                {
-                                    "role": "user",
-                                    "content": user_input
-                                }
-                            ]
-                        },
-                        config=config,
-                        stream_mode="messages",
-                        version="v2",
-                    ):
-                        chunk: dict[str, Any]
-                        token, metadata = chunk["data"]
-                        cpu_times = update_status_line(status_line, cpu_times)
-                        for block in token.content_blocks:
-                            if block["type"] == "reasoning":
-                                piece = block.get("reasoning") or block.get("text", "")
-                                if piece:
-                                    with print_lock:
-                                        buffer_raciocinio += piece
-                                        live.update(session_view(
-                                            session_history,
-                                            status_line,
-                                            Markdown(buffer_resposta, justify="left") if buffer_resposta else None,
-                                            state="RACIOCINANDO",
-                                            reasoning=buffer_raciocinio,
-                                        ))
-                                        live.refresh()
-                                continue
-
-                            elif block["type"] == "text" and block.get("text"):
-                                piece = block["text"]
-                                with print_lock:
-                                    if metadata["langgraph_node"] == "tools":
-                                        printed_header_reasoning = False
-                                        printed_header_text = False
-                                        buffer_resposta = ""
-                                        continue
-                                    else:
-                                        if not printed_header_text:
-                                            session_history.append("\nNexus\n", style="bold green")
-                                            printed_header_text = True
-                                        buffer_resposta += piece
-                                        live.update(session_view(
-                                            session_history,
-                                            status_line,
-                                            Markdown(buffer_resposta, justify="left"),
-                                            state="RESPONDENDO",
-                                            reasoning=buffer_raciocinio,
-                                        ))
-                                        live.refresh()
-                                text_buffer += piece
-                                sentence_buffer += piece
-
-                                ready, sentence_buffer = split_ready_sentences(sentence_buffer)
-                                for sentence in ready:
-                                    tts_queue.put(sentence)
-
-                            elif block["type"] == "tool_call_chunk":
-                                continue
-
-                except Exception:
-                    fallback = (
-                        "Não consegui acessar o serviço de inteligência agora. "
-                        "Verifique a chave da API e a conexão com a internet e tente novamente."
-                    )
-                    with print_lock:
-                        if not printed_header_text:
-                            session_history.append("\nNexus\n", style="bold green")
-                            printed_header_text = True
-                        buffer_resposta += (
-                            "\n\n" if buffer_resposta else ""
-                        ) + fallback
-                        sentence_buffer += " " + fallback
-                        live.update(session_view(
-                            session_history,
-                            status_line,
-                            Markdown(buffer_resposta, justify="left"),
-                            state="ERRO",
-                            reasoning=buffer_raciocinio,
-                        ))
-                        live.refresh()
-
-                finally:
-                    # Roda mesmo se o agent.stream() acima estourar uma exceção no
-                    # meio do turno — sem isso, a tts_thread ficava presa pra
-                    # sempre esperando STOP_SIGNAL numa tts_queue que ninguém mais
-                    # ia alimentar, e o próximo turno criava uma 2ª thread lendo
-                    # da mesma fila (dois consumidores brigando pelos itens).
-
-                    # Frase final sem pontuação (se sobrou algo no buffer)
-                    if sentence_buffer.strip():
-                        tts_queue.put(sentence_buffer.strip())
-
-                    # Sinaliza fim do stream e espera o pipeline esvaziar
-                    tts_queue.put(STOP_SIGNAL)
-                    tts_thread.join()
-                    playback_thread.join()
-
-                    if buffer_resposta.strip():
-                        session_history.append(buffer_resposta.strip() + "\n\n")
-                    live.update(session_view(
-                        session_history,
-                        status_line,
-                        reasoning=buffer_raciocinio,
-                    ))
-
-        except KeyboardInterrupt:
-            player.stop()
             stream.stop_stream()
             stream.close()
-            if wake_stream is not None:
+        except OSError:
+            pass
+        if wake_stream is not None:
+            try:
                 wake_stream.stop_stream()
                 wake_stream.close()
-            mic.terminate()
-        finally:
-            status_stop_event.set()
-            status_thread.join()
+            except OSError:
+                pass
+        mic.terminate()
+        if close_app:
+            app.finish()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Assistente de voz Nexus")
+    parser.add_argument(
+        "--sem-ativacao",
+        action="store_true",
+        help="Captura a fala diretamente, sem exigir a palavra de ativação",
+    )
+    args = parser.parse_args()
+    use_wake_word = not args.sem_ativacao
+    NexusApp(runner=lambda app: run_assistant(app, use_wake_word)).run()
+
+
+if __name__ == "__main__":
+    main()

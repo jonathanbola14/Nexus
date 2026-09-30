@@ -14,7 +14,7 @@ def load_web_search_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "firecrawl", firecrawl_package)
     monkeypatch.setitem(sys.modules, "firecrawl.v2", firecrawl_module)
 
-    module_path = Path(__file__).parents[1] / "tools" / "web_search.py"
+    module_path = Path(__file__).parents[1] / "src" / "tools" / "web_search.py"
     module_spec = importlib.util.spec_from_file_location("web_search_tool", module_path)
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)

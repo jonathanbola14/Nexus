@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-module_path = Path(__file__).parents[1] / "tools" / "print.py"
+module_path = Path(__file__).parents[1] / "src" / "tools" / "print.py"
 module_spec = importlib.util.spec_from_file_location("print_tool", module_path)
 print_module = importlib.util.module_from_spec(module_spec)
 module_spec.loader.exec_module(print_module)

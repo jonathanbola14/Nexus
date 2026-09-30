@@ -57,22 +57,26 @@ def load_main_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "src.LLM", llm_module)
     monkeypatch.setitem(sys.modules, "src.STT", stt_module)
     monkeypatch.setitem(sys.modules, "src.WakeWord", wakeword_module)
+    terminal_ui_module = types.ModuleType("src.terminal_ui")
+    terminal_ui_module.session_view = Mock()
+    terminal_ui_module.NexusApp = Mock()
+    monkeypatch.setitem(sys.modules, "src.terminal_ui", terminal_ui_module)
 
-    utils_module = types.ModuleType("utils")
+    utils_module = types.ModuleType("src.utils")
     utils_module.__path__ = []
-    play_file_module = types.ModuleType("utils.play_file")
+    play_file_module = types.ModuleType("src.utils.play_file")
     play_file_module.Play = Mock()
-    recorder_module = types.ModuleType("utils.recorder")
+    recorder_module = types.ModuleType("src.utils.recorder")
     recorder_module.collect_speech_frames = Mock()
-    monkeypatch.setitem(sys.modules, "utils", utils_module)
-    audio_module = types.ModuleType("utils.audio")
+    monkeypatch.setitem(sys.modules, "src.utils", utils_module)
+    audio_module = types.ModuleType("src.utils.audio")
     audio_module.resample_pcm16 = Mock()
-    monkeypatch.setitem(sys.modules, "utils.audio", audio_module)
-    increase_gain_module = types.ModuleType("utils.increase_gain")
+    monkeypatch.setitem(sys.modules, "src.utils.audio", audio_module)
+    increase_gain_module = types.ModuleType("src.utils.increase_gain")
     increase_gain_module.gain = Mock()
-    monkeypatch.setitem(sys.modules, "utils.increase_gain", increase_gain_module)
-    monkeypatch.setitem(sys.modules, "utils.play_file", play_file_module)
-    monkeypatch.setitem(sys.modules, "utils.recorder", recorder_module)
+    monkeypatch.setitem(sys.modules, "src.utils.increase_gain", increase_gain_module)
+    monkeypatch.setitem(sys.modules, "src.utils.play_file", play_file_module)
+    monkeypatch.setitem(sys.modules, "src.utils.recorder", recorder_module)
 
     module_path = Path(__file__).parents[1] / "main.py"
     module_spec = importlib.util.spec_from_file_location("main_text_pipeline", module_path)
@@ -133,3 +137,40 @@ def test_load_models_records_initialization_errors(monkeypatch):
 
     assert isinstance(load_state["error"], RuntimeError)
     assert load_state["message"] == "Falha ao carregar modelos"
+
+
+def test_assistant_keeps_ui_open_when_model_loading_fails(monkeypatch, tmp_path):
+    main_module = load_main_module(monkeypatch)
+    main_module.PROJECT_ROOT = tmp_path
+    audio_dir = tmp_path / "audios"
+    audio_dir.mkdir()
+    (audio_dir / "noise.wav").touch()
+    main_module.stream = Mock()
+    main_module.mic.terminate = Mock()
+
+    def fail_loading(load_state, _use_wake_word):
+        load_state["error"] = RuntimeError("falha simulada ao carregar agente")
+
+    monkeypatch.setattr(main_module, "load_models", fail_loading)
+
+    class FakeApp:
+        stop_requested = threading.Event()
+
+        def __init__(self):
+            self.errors = []
+            self.finished = False
+
+        def set_status(self, message, state):
+            self.errors.append((message, state))
+
+        def publish_metrics(self, _message):
+            pass
+
+        def finish(self):
+            self.finished = True
+
+    app = FakeApp()
+    main_module.run_assistant(app, use_wake_word=False)
+
+    assert app.errors == [("Falha ao iniciar: falha simulada ao carregar agente", "ERRO")]
+    assert app.finished is False

@@ -1,4 +1,4 @@
-torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl
+torch
 pyaudio
 openWakeWord
 noisereduce
@@ -7,7 +7,9 @@ onnx_asr
 webrtcvad
 langchain_nvidia_ai_endpoints
 langchain
+python-dotenv>=1.0
 setuptools<81
 scipy>=1.10
 huggingface_hub
 kokoro
+textual>=1.0.0

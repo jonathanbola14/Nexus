@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-import dotenv
+from dotenv import dotenv_values
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware.memory import MemoryMiddleware
@@ -13,7 +13,7 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 
-from tools import data, hora, print, web_search
+from src.tools import data, hora, print, web_search
 
 home = str(Path.home)
 
@@ -29,9 +29,7 @@ store = InMemoryStore()
 
 def _get_nvidia_api_key():
     project_env = Path(__file__).resolve().parents[1] / ".env"
-    api_key = os.getenv("NVIDIA_API_KEY") or dotenv.dotenv_values(project_env).get(
-        "NVIDIA_API_KEY"
-    )
+    api_key = os.getenv("NVIDIA_API_KEY") or dotenv_values(project_env).get("NVIDIA_API_KEY")
     if not api_key:
         raise RuntimeError(
             "Chave NVIDIA_API_KEY ausente. Configure-a no ambiente ou no arquivo .env da raiz do projeto."
@@ -41,7 +39,7 @@ def _get_nvidia_api_key():
 
 def Agent():
     llm = ChatNVIDIA(
-        model="deepseek-ai/deepseek-v4.1-flash",
+        model="z-ai/glm-5.3-flash",
         api_key=_get_nvidia_api_key(),
         temperature=1,
         max_tokens=16384,

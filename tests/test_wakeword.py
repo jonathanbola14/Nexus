@@ -18,12 +18,18 @@ def load_wakeword_module(monkeypatch, collect_speech_frames):
     openwakeword_module.Model = object
     monkeypatch.setitem(sys.modules, "openwakeword", openwakeword_module)
 
-    play_file_module = types.ModuleType("utils.play_file")
+    src_module = types.ModuleType("src")
+    src_module.__path__ = []
+    monkeypatch.setitem(sys.modules, "src", src_module)
+    utils_module = types.ModuleType("src.utils")
+    utils_module.__path__ = []
+    monkeypatch.setitem(sys.modules, "src.utils", utils_module)
+    play_file_module = types.ModuleType("src.utils.play_file")
     play_file_module.Play = object
-    recorder_module = types.ModuleType("utils.recorder")
+    recorder_module = types.ModuleType("src.utils.recorder")
     recorder_module.collect_speech_frames = collect_speech_frames
-    monkeypatch.setitem(sys.modules, "utils.play_file", play_file_module)
-    monkeypatch.setitem(sys.modules, "utils.recorder", recorder_module)
+    monkeypatch.setitem(sys.modules, "src.utils.play_file", play_file_module)
+    monkeypatch.setitem(sys.modules, "src.utils.recorder", recorder_module)
 
     module_path = Path(__file__).parents[1] / "src" / "WakeWord.py"
     module_spec = importlib.util.spec_from_file_location("wakeword_under_test", module_path)

@@ -12,9 +12,9 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from utils.play_file import Play
-from utils.audio import resample_pcm16
-from utils.recorder import collect_speech_frames
+from src.utils.play_file import Play
+from src.utils.audio import resample_pcm16
+from src.utils.recorder import collect_speech_frames
 
 WAKEWORD_RATE = 16000
 
@@ -103,14 +103,18 @@ def WakeWord(
             last_save = time.time()
             activation_times[mdl] = []
 
-            live.update(
-                Panel(
-                    Text(f'Palavra de ativação detectada: {mdl}', style="bold green"),
-                    title="[bold green] NEXUS [/bold green] [dim]/[/dim] [bold]ATIVAÇÃO[/bold]",
-                    border_style="green",
-                    padding=(1, 2),
+            message = f"Palavra de ativação detectada: {mdl}"
+            if getattr(live, "_is_textual_bridge", False) is True:
+                live.set_status(message, "ATIVAÇÃO")
+            else:
+                live.update(
+                    Panel(
+                        Text(message, style="bold green"),
+                        title="[bold green] NEXUS [/bold green] [dim]/[/dim] [bold]ATIVAÇÃO[/bold]",
+                        border_style="green",
+                        padding=(1, 2),
+                    )
                 )
-            )
 
             # Reusa o player global (instanciado uma vez em main.py) em vez de
             # criar um novo Play() — cada Play() abre um PyAudio() + output

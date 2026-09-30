@@ -91,7 +91,7 @@ def load_llm_module(monkeypatch):
         InMemoryStore=in_memory_store,
     )
 
-    tools_module = stub_module(monkeypatch, "tools")
+    tools_module = stub_module(monkeypatch, "src.tools")
     tools_module.data = object()
     tools_module.hora = object()
     tools_module.print = object()
@@ -122,7 +122,7 @@ def test_agent_builds_model_and_graph_with_expected_tools(monkeypatch):
 
     assert result is dependencies["agent_instance"]
     dependencies["chat_nvidia"].assert_called_once_with(
-        model="deepseek-ai/deepseek-v4.1-flash",
+        model="z-ai/glm-5.3-flash",
         api_key="test-key",
         temperature=1,
         max_tokens=16384,
