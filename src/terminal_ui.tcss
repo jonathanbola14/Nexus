@@ -1,0 +1,241 @@
+SettingsScreen {
+    align: center middle;
+    background: $background 82%;
+}
+
+#settings-dialog {
+    width: 56;
+    height: auto;
+    padding: 1 2;
+    border: round $border-blurred;
+    background: $surface;
+}
+
+.settings-title {
+    height: 2;
+    color: $primary;
+    text-style: bold;
+}
+
+.settings-label {
+    height: 1;
+    color: $secondary;
+}
+
+Select {
+    width: 1fr;
+    margin-bottom: 1;
+}
+
+#settings-actions {
+    height: 3;
+    align: right middle;
+}
+
+SettingsScreen.compact #settings-dialog {
+    width: 1fr;
+    margin: 1;
+}
+
+Header {
+    height: 1;
+    dock: top;
+}
+
+Footer {
+    height: 1;
+    dock: bottom;
+    background: $surface;
+}
+
+Screen {
+    background: $background;
+    color: $foreground;
+}
+
+Header {
+    background: $surface;
+    color: $primary;
+}
+
+#workspace {
+    height: 1fr;
+    padding: 0 3;
+}
+
+#conversation {
+    width: 1fr;
+    height: 1fr;
+    padding: 1 2;
+}
+
+.section-title {
+    color: $primary;
+    height: 2;
+}
+
+#transcript {
+    height: 1fr;
+    padding-top: 0;
+}
+
+.transcript-section {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.transcript-label {
+    height: 1;
+    color: $secondary;
+    text-style: bold;
+}
+
+.transcript-content {
+    height: auto;
+    padding-left: 1;
+    padding-top: 1;
+}
+
+#history {
+    color: $foreground;
+}
+
+#reasoning {
+    color: $foreground-muted;
+}
+
+#response {
+    color: $foreground;
+}
+
+#state {
+    width: 14;
+    height: 1;
+    color: $primary;
+    text-style: bold;
+    padding: 0 1;
+    content-align: left middle;
+}
+
+#activity-indicator {
+    width: 3;
+    height: 1;
+    display: none;
+}
+
+#statusbar {
+    height: 3;
+    padding: 0 1;
+    border-top: solid $border-blurred;
+    background: $surface;
+}
+
+#detail {
+    width: 1fr;
+    height: 1;
+    color: $foreground-muted;
+    padding: 0 1;
+    content-align: left middle;
+}
+
+#progress-wrap {
+    height: auto;
+    padding: 0 3;
+    display: none;
+}
+
+#progress {
+    height: 1;
+    color: $accent;
+}
+
+#progress-bar {
+    height: 1;
+    width: 1fr;
+    color: $primary;
+}
+
+Screen.compact #activity-indicator {
+    width: 3;
+}
+
+.tool-indicator {
+    width: 1fr;
+    height: 1;
+    padding: 0 1 0 2;
+    color: $accent;
+    text-style: bold;
+    content-align: left middle;
+}
+
+#metrics {
+    width: 28;
+    height: 1;
+    padding: 0 1;
+    color: $foreground-muted;
+    content-align: left middle;
+}
+
+#controls {
+    height: 3;
+    align: right middle;
+    padding-right: 2;
+}
+
+Button {
+    margin: 0 1;
+    min-width: 12;
+    height: 3;
+    padding: 0 1;
+    border: none;
+    background: $panel;
+    color: $foreground;
+}
+
+Button:hover {
+    background: $primary-darken-1;
+}
+
+Screen.style-panels #conversation {
+    border: round $border-blurred;
+    background: $panel;
+    margin: 1 1 0 1;
+}
+
+Screen.style-panels #statusbar {
+    border: round $border-blurred;
+    margin: 0 1;
+}
+
+Screen.style-panels #workspace {
+    padding: 0 2;
+}
+
+Screen.compact #workspace {
+    padding: 0 1;
+}
+
+Screen.compact #conversation {
+    height: 1fr;
+    padding: 1;
+}
+
+Screen.compact #statusbar {
+    layout: vertical;
+    height: auto;
+    padding: 0 1;
+}
+
+Screen.compact #state,
+Screen.compact #detail,
+Screen.compact #metrics {
+    width: 1fr;
+}
+
+Screen.compact #progress {
+    padding: 0 1;
+}
+
+Screen.compact #progress-wrap {
+    padding: 0 1;
+}
