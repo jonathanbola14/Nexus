@@ -100,6 +100,31 @@ def test_split_ready_sentences_returns_complete_sentences_and_remainder(monkeypa
     assert remainder == "Ainda estou falando"
 
 
+def test_streaming_tool_call_blocks_publish_tool_names(monkeypatch):
+    main_module = load_main_module(monkeypatch)
+    app = Mock()
+    token = types.SimpleNamespace(
+        content_blocks=[
+            {"type": "tool_call_chunk", "name": "Hour", "args": {}},
+            {"type": "tool_call", "name": "Hour", "args": {}},
+            {"type": "text", "text": "Agora são 14 horas."},
+        ]
+    )
+
+    main_module._publish_tool_call_blocks(app, token)
+
+    app.publish_tool.assert_called_once_with("Hour")
+
+
+def test_shutdown_command_ignores_case_and_trailing_punctuation(monkeypatch):
+    main_module = load_main_module(monkeypatch)
+
+    assert main_module._is_shutdown_command("desligar!!!")
+    assert main_module._is_shutdown_command("  ENCERRAR. ")
+    assert main_module._is_shutdown_command("Desliga")
+    assert not main_module._is_shutdown_command("não desligar")
+
+
 def test_split_ready_sentences_keeps_abbreviations_and_decimal_numbers(monkeypatch):
     main_module = load_main_module(monkeypatch)
 

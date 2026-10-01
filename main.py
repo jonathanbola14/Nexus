@@ -63,6 +63,22 @@ def system_status(previous_cpu_times):
     return current_cpu_times, f"CPU {cpu_percent:5.1f}%   MEM {memory_percent:5.1f}%"
 
 
+def _publish_tool_call_blocks(app, token):
+    published_names = set()
+    for block in token.content_blocks:
+        if block.get("type") not in {"tool_call", "tool_call_chunk"}:
+            continue
+        name = block.get("name")
+        if name and name not in published_names:
+            app.publish_tool(name)
+            published_names.add(name)
+
+
+def _is_shutdown_command(user_input):
+    command = re.sub(r"[.!?,;:]+$", "", user_input.strip().casefold()).strip()
+    return command in {"desligar", "desliga", "encerrar"}
+
+
 def status_worker(app, stop_event):
     cpu_times = _cpu_times()
     while not stop_event.wait(0.3):
@@ -112,7 +128,7 @@ def split_ready_sentences(buffer):
     return sentences, buffer
 
 
-SAMPLE_RATE = 24000
+SAMPLE_RATE = 20000
 PREBUFFER_SIZE = 1  # quantas frases sintetizadas esperar antes de começar a tocar
 
 tts_queue = queue.Queue()
@@ -327,10 +343,9 @@ def run_assistant(app: App, use_wake_word: bool):
                 continue
 
             user_input = Speech_to_Text(data=audio, RATE=RATE, model=stt_model)
-            if user_input in (
-                "Desligar.", "Desligar", "Encerrar", "Encerrar.", "Desliga.", "Desliga"
-            ):
-                app._shutdown()
+            if _is_shutdown_command(user_input):
+                app.call_from_thread(app.action_quit)
+                break
 
             session_history += f"Você\n{user_input}\n\n"
             app.publish_session(session_history, "PENSANDO")
@@ -356,6 +371,7 @@ def run_assistant(app: App, use_wake_word: bool):
                     token, metadata = chunk["data"]
                     cpu_times, metrics = system_status(cpu_times)
                     app.publish_metrics(metrics)
+                    _publish_tool_call_blocks(app, token)
 
                     for block in token.content_blocks:
                         if block["type"] == "reasoning":
@@ -384,6 +400,7 @@ def run_assistant(app: App, use_wake_word: bool):
                                 response=buffer_resposta,
                                 reasoning=buffer_raciocinio,
                             )
+
                             sentence_buffer += piece
                             ready, sentence_buffer = split_ready_sentences(sentence_buffer)
                             for sentence in ready:
@@ -442,7 +459,7 @@ def run_assistant(app: App, use_wake_word: bool):
                 pass
         mic.terminate()
         if close_app:
-            app.finish()
+            app._shutdown()
 
 
 def main():
