@@ -1,3 +1,5 @@
+"""Wake-word detection and transition into speech recording."""
+
 import collections
 import os
 import sys
@@ -26,6 +28,7 @@ def configWakeWord(
     threshold=0.65,
     input_rate: int | None = None,
 ):
+    """Open the detector stream and initialize the wake-word model state."""
     input_rate = input_rate or RATE
     wake_stream = mic.open(
         format=pyaudio.paInt16,
@@ -34,13 +37,13 @@ def configWakeWord(
         input=True,
         frames_per_buffer=int(input_rate * 0.08)
     )
-    # Predict continuously on audio stream
+    # The detector consumes audio continuously until the activation is stable.
     last_save = time.time()
     activation_times = collections.defaultdict(list)
-    # Set waiting period after activation before saving clip (to get some audio context after the activation)
+    # Keep a short context window after activation before recording speech.
     save_delay = 0.3  # seconds
 
-    # Set cooldown period before another clip can be saved
+    # Prevent a single utterance from triggering multiple recordings.
     cooldown = 4  # seconds
 
     if model_path and os.path.exists(model_path):
@@ -57,6 +60,7 @@ def configWakeWord(
 
 
 def _audio_path(filename: str) -> str:
+    """Resolve an audio asset path relative to the project root."""
     project_root = Path(__file__).resolve().parents[1]
     return str(project_root / "audios" / filename)
 
@@ -76,8 +80,9 @@ def WakeWord(
     threshold=0.65,
     input_rate: int | None = None,
 ):
+    """Read a detector frame and record speech when the wake word activates."""
     input_rate = input_rate or RATE
-    # Get audio
+    # Resample the microphone frame to the detector's required sample rate.
     mic_audio = np.frombuffer(
         buffer=resample_pcm16(
             wake_stream.read(
@@ -90,10 +95,10 @@ def WakeWord(
         dtype=np.int16,
     )
 
-    # Feed to openWakeWord model
+    # Feed the frame to openWakeWord.
     prediction = owwModel.predict(mic_audio)
 
-    # Check for model activations (score above threshold)
+    # Track scores above the configured activation threshold.
     for mdl in prediction:
         if prediction[mdl] >= threshold:
             activation_times[mdl].append(time.time())
@@ -106,6 +111,7 @@ def WakeWord(
             message = f"Palavra de ativação detectada: {mdl}"
             if getattr(live, "_is_textual_bridge", False) is True:
                 live.set_status(message, "ATIVAÇÃO")
+                
             else:
                 live.update(
                     Panel(
@@ -116,9 +122,8 @@ def WakeWord(
                     )
                 )
 
-            # Reusa o player global (instanciado uma vez em main.py) em vez de
-            # criar um novo Play() — cada Play() abre um PyAudio() + output
-            # stream e nunca os fecharíamos, vazando recursos a cada wake word.
+            # Reuse the player created by main.py. Creating a player for each
+            # activation would also create output streams that are never closed.
             player.file(file=_audio_path("activation.wav"))
             time.sleep(0.15)
 
@@ -126,14 +131,16 @@ def WakeWord(
                 stream, RATE, CHUNK, live, input_rate=input_rate
             )
 
-            # Evita reativação: drena frames acumulados no wake_stream durante a fala
-            wake_stream.read(num_frames=wake_stream.get_read_available(), exception_on_overflow=False)
-            # Limpa o buffer de previsões do modelo openWakeWord
+            # Discard frames captured during speech to avoid immediate retriggers.
+            wake_stream.read(
+                num_frames=wake_stream.get_read_available(),
+                exception_on_overflow=False,
+            )
+            # Clear the model's rolling prediction state before the next utterance.
             owwModel.reset()
 
             return audio, last_save, activation_times
 
-    # Sem áudio: retorna explicitamente None para o main.py poder filtrar com
-    # `if audio is None`. Antes retornava bytes(0), que passava no filtro e
-    # chegava vazio no STT (np.frombuffer de 0 bytes -> array de tamanho 0).
+    # Return None when no activation occurred so the caller can skip STT. Empty
+    # bytes would otherwise reach the recognizer as a zero-length waveform.
     return None, last_save, activation_times

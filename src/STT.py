@@ -1,3 +1,5 @@
+"""Speech-to-text model loading and audio transcription helpers."""
+
 import wave
 from pathlib import Path
 
@@ -9,7 +11,7 @@ _stt_model = None
 
 
 def load_stt_model():
-    """Carrega o modelo ASR uma única vez (evita recarregar a cada chamada)."""
+    """Load the ASR model once and reuse the cached instance."""
     global _stt_model
     if _stt_model is None:
         try:
@@ -26,36 +28,37 @@ def load_stt_model():
 
 
 def _audio_path(filename: str) -> str:
+    """Resolve an audio asset path relative to the project root."""
     project_root = Path(__file__).resolve().parents[1]
     return str(project_root / "audios" / filename)
 
 
 def Speech_to_Text(data: bytes, RATE: int, model=None):
+    """Reduce background noise and transcribe signed 16-bit PCM audio."""
     if model is None:
         model = load_stt_model()
 
-    # bytes -> numpy
+    # Convert signed 16-bit PCM bytes to the float waveform expected by ASR.
     audio = np.frombuffer(buffer=data, dtype=np.int16).astype(np.float32)
 
     with wave.open(_audio_path("noise.wav"), mode='rb') as f:
         nframes = f.getnframes()
-        ruido = f.readframes(nframes=max(0, nframes - 10))
+        noise_bytes = f.readframes(nframes=max(0, nframes - 10))
 
-    ruido = np.frombuffer(buffer=ruido, dtype=np.int16).astype(np.float32)
+    noise_audio = np.frombuffer(buffer=noise_bytes, dtype=np.int16).astype(np.float32)
 
-    # reduz ruído
-    if len(ruido) > 0:
+    if len(noise_audio) > 0:
         audio = nr.reduce_noise(
             y=audio,
             sr=RATE,
             stationary=False,
-            y_noise=ruido,
+            y_noise=noise_audio,
             n_jobs=-1,
             use_tqdm=True,
             n_fft=1024
         )
 
-    # Recognize exige sample_rate ao receber waveform numpy (não path).
-    # Sem ele, o modelo pode usar um default incorreto e transcrever errado.
+    # Waveform input requires an explicit sample rate; otherwise the model may
+    # assume a different rate and produce an incorrect transcription.
     result = model.recognize(audio, sample_rate=RATE, target_language="pt-br")
     return result

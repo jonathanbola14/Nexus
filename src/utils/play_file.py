@@ -1,3 +1,5 @@
+"""Audio playback helpers for WAV files and in-memory synthesized speech."""
+
 import wave
 
 import numpy as np
@@ -5,6 +7,8 @@ import pyaudio
 
 
 class Play:
+    """Manage the PyAudio output stream used by the assistant."""
+
     def __init__(self) -> None:
         self.p = pyaudio.PyAudio()
 
@@ -24,7 +28,7 @@ class Play:
         self.sample_rate = default_sample_rate
 
         self.file_path = ""
-        self.wf: wave.Wave_read | None = None  # <-- tipo correto, não o módulo
+        self.wf: wave.Wave_read | None = None
 
         self.stream = self.p.open(
             format=self.format,
@@ -34,6 +38,7 @@ class Play:
         )
 
     def file(self, file: str):
+        """Play a WAV file, reopening the stream when its format differs."""
         self.file_path = file
         self.wf = wave.open(self.file_path, "rb")
 
@@ -41,10 +46,8 @@ class Play:
         ch = self.wf.getnchannels()
         rate = self.wf.getframerate()
 
-        # O stream é aberto no __init__ com 2 canais/16 kHz. Sem reabrir, o
-        # PyAudio toca com a configuração antiga mesmo que format/sample_rate/
-        # channels do WAV sejam outros — som distorcido pelo sample_rate
-        # errado. Espelha a lógica já existente em tensor().
+        # PyAudio streams retain their original format, so changed WAV settings
+        # require reopening the stream rather than updating attributes alone.
         if fmt != self.format or ch != self.channels or rate != self.sample_rate:
             self.stream.stop_stream()
             self.stream.close()
@@ -64,9 +67,14 @@ class Play:
             dados = self.wf.readframes(1024)
 
     def tensor(self, audio, samplerate: int = 24000, channels: int = 1):
-        # O Kokoro retorna um torch.Tensor, não um numpy.ndarray — converte antes de tudo
+        """Play a synthesized waveform, accepting NumPy or tensor input."""
+        # Kokoro returns a torch.Tensor; normalize it to a NumPy array first.
         if not isinstance(audio, np.ndarray):
-            audio = audio.detach().cpu().numpy() if hasattr(audio, "detach") else np.asarray(audio)
+            audio = (
+                audio.detach().cpu().numpy()
+                if hasattr(audio, "detach")
+                else np.asarray(audio)
+            )
 
         if audio.dtype != np.int16:
             audio = np.clip(audio, -1.0, 1.0)
@@ -74,9 +82,8 @@ class Play:
 
         self.format = self.p.get_format_from_width(2)
 
-        # O stream é aberto uma vez no __init__ com outra taxa/canais; se o
-        # áudio pedido usa valores diferentes, precisa reabrir o stream —
-        # só trocar os atributos não muda a configuração real do PyAudio.
+        # Reopen the stream when the requested format differs; changing these
+        # attributes alone does not update PyAudio's actual stream settings.
         if samplerate != self.sample_rate or channels != self.channels:
             self.stream.stop_stream()
             self.stream.close()
@@ -89,13 +96,14 @@ class Play:
                 output=True,
             )
 
-        dados = audio.tobytes()
+        audio_bytes = audio.tobytes()
         chunk_size = 1024 * 2
 
-        for i in range(0, len(dados), chunk_size):
-            self.stream.write(dados[i:i + chunk_size])
+        for offset in range(0, len(audio_bytes), chunk_size):
+            self.stream.write(audio_bytes[offset : offset + chunk_size])
 
     def stop(self):
+        """Close the output stream, PyAudio instance, and open WAV file."""
         self.stream.stop_stream()
         self.stream.close()
         self.p.terminate()

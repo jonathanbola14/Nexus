@@ -1,3 +1,5 @@
+"""Audio format conversion helpers shared by capture and detection."""
+
 from math import gcd
 
 import numpy as np
@@ -5,6 +7,7 @@ from scipy.signal import resample_poly
 
 
 def resample_pcm16(data: bytes, source_rate: int, target_rate: int) -> bytes:
+    """Resample mono signed 16-bit PCM bytes without changing their format."""
     if source_rate == target_rate or not data:
         return data
 

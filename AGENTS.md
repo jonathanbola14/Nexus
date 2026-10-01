@@ -39,7 +39,7 @@ Streaming TTS pipeline: LLM tokens stream into `text_buffer` → `split_ready_se
 
 ## Style
 
-- All user-facing strings and comments are **Portuguese**. Match this when editing existing files.
+- Keep code comments and docstrings in **English**. Keep user-facing strings and the agent's system prompt in Brazilian Portuguese.
 - `setuptools<81` pin in `requirements.txt`/`pyproject.toml` is deliberate (compat with pyaudio/older build) — don't bump casually.
 
 ## ⚠️ Security note

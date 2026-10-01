@@ -9,7 +9,8 @@ __all__ = ["click", "data", "drag", "hora", "move", "print", "scroll", "web_sear
 
 
 def __getattr__(name):
-	if name in {"click", "drag", "move", "scroll"}:
-		mouse_tools = import_module(".mouse", __name__)
-		return getattr(mouse_tools, name)
-	raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    """Load mouse tools lazily to avoid initializing input devices on import."""
+    if name in {"click", "drag", "move", "scroll"}:
+        mouse_tools = import_module(".mouse", __name__)
+        return getattr(mouse_tools, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

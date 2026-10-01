@@ -1,3 +1,5 @@
+"""Textual interface for live assistant sessions and standalone previews."""
+
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -22,6 +24,7 @@ from textual.widgets import (
 
 
 def format_transcript(transcript: str) -> Text:
+    """Style speaker labels while preserving the original transcript text."""
     formatted = Text()
     speaker_styles = {
         "Você": "bold #79d8c2",
@@ -102,7 +105,6 @@ THEME_CHOICES = (
     ("Azul oceano", "ocean"),
     ("Âmbar", "amber"),
     ("Claro", "paper"),
-    ("")
 )
 
 STYLE_CHOICES = (
@@ -129,9 +131,12 @@ ACTIVITY_STATES = {
 
 
 class SettingsScreen(ModalScreen[tuple[str, str] | None]):
+    """Modal dialog for selecting the interface theme and layout."""
+
     BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
         ("escape", "cancel", "Cancelar"),
     ]
+
     def __init__(self, theme: str, style: str) -> None:
         super().__init__()
         self.current_theme = theme
@@ -174,11 +179,13 @@ class SettingsScreen(ModalScreen[tuple[str, str] | None]):
 
 
 class NexusApp(App):
+    """Render the assistant session and bridge worker updates to Textual."""
+
     _is_textual_bridge = True
     TITLE = "NEXUS"
     SUB_TITLE = "Assistente pessoal de voz"
     assistant_state: reactive[str] = reactive("OUVINDO")
-    CSS_PATH = str(Path(__file__, "css").with_name("terminal_ui.tcss"))
+    CSS_PATH = str(Path(__file__).parent / "css" / "terminal_ui.tcss")
     BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
         ("space", "next_step", "Próxima etapa"),
         ("r", "restart", "Reiniciar"),
@@ -187,11 +194,27 @@ class NexusApp(App):
     ]
 
     STEPS: ClassVar[list[tuple[str, str, str]]] = [
-        ("OUVINDO", "Aguardando a palavra de ativação.\n\nDiga: Nexus.", "Microfone\nPronto para ouvir"),
+        (
+            "OUVINDO",
+            "Aguardando a palavra de ativação.\n\nDiga: Nexus.",
+            "Microfone\nPronto para ouvir",
+        ),
         ("PENSANDO", "Você\nQue horas são?", "Entrada\nFala reconhecida"),
-        ("RACIOCINANDO", "Você\nQue horas são?\n\nNexus\nConsultando o horário atual...", "Ferramenta\nConsulta de hora"),
-        ("RESPONDENDO", "Você\nQue horas são?\n\nNexus\nAgora são 14 horas e 32 minutos.", "Voz\nAlex · pt-BR\n\nSistema\nCPU e memória locais"),
-        ("OUVINDO", "Você\nQue horas são?\n\nNexus\nAgora são 14 horas e 32 minutos.\n\nAguardando a próxima solicitação.", "Sessão\nPronta"),
+        (
+            "RACIOCINANDO",
+            "Você\nQue horas são?\n\nNexus\nConsultando o horário atual...",
+            "Ferramenta\nConsulta de hora",
+        ),
+        (
+            "RESPONDENDO",
+            "Você\nQue horas são?\n\nNexus\nAgora são 14 horas e 32 minutos.",
+            "Voz\nAlex · pt-BR\n\nSistema\nCPU e memória locais",
+        ),
+        (
+            "OUVINDO",
+            "Você\nQue horas são?\n\nNexus\nAgora são 14 horas e 32 minutos.\n\nAguardando a próxima solicitação.",
+            "Sessão\nPronta",
+        ),
     ]
 
     def __init__(self, runner: Callable[["NexusApp"], None] | None = None) -> None:
@@ -200,8 +223,8 @@ class NexusApp(App):
         self.preference_theme = "nexus"
         self.preference_style = "minimal"
         self.stop_requested = threading.Event()
-        self.shutdown_callback = None
-        self._published_session = None
+        self.shutdown_callback: Callable[[], None] | None = None
+        self._published_session: tuple[str, str, str] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -213,21 +236,29 @@ class NexusApp(App):
                 )
                 with VerticalScroll(id="transcript"):
                     with Vertical(classes="transcript-section", id="history-section"):
-                        yield Static("", id="history", classes="transcript-content", markup=False)
+                        yield Static(
+                            "", id="history", classes="transcript-content", markup=False
+                        )
                     with Vertical(classes="transcript-section", id="reasoning-section"):
                         yield Static("RACIOCÍNIO", classes="transcript-label")
-                        yield Static("", id="reasoning", classes="transcript-content", markup=False)
+                        yield Static(
+                            "", id="reasoning", classes="transcript-content", markup=False
+                        )
                     with Vertical(classes="transcript-section", id="response-section"):
                         yield Static("RESPOSTA", classes="transcript-label")
-                        yield Static("", id="response", classes="transcript-content", markup=False)
+                        yield Static(
+                            "", id="response", classes="transcript-content", markup=False
+                        )
             with Horizontal(id="statusbar"):
                 yield LoadingIndicator(id="activity-indicator")
                 yield Static("", id="state", markup=False)
                 yield Static("", id="detail", markup=False)
                 yield Static("CPU --   MEM --", id="metrics", markup=False)
+
             with Vertical(id="progress-wrap"):
                 yield Static("", id="progress", markup=False)
                 yield ProgressBar(total=100, show_eta=False, id="progress-bar")
+
         with Horizontal(id="controls"):
             if getattr(self, "runner", None) is None:
                 yield Button("Avançar", id="next", variant="success")
@@ -236,6 +267,7 @@ class NexusApp(App):
             else:
                 yield Button("Aparência", id="settings-button")
                 yield Button("Encerrar", id="quit", variant="error")
+                
         yield Footer()
 
     def on_mount(self) -> None:
@@ -308,6 +340,7 @@ class NexusApp(App):
         response: str = "",
         reasoning: str = "",
     ) -> None:
+        """Schedule a conversation update on Textual's main thread."""
         self.call_from_thread(
             self._publish_session, transcript, state, response, reasoning
         )
@@ -315,6 +348,7 @@ class NexusApp(App):
     def _publish_session(
         self, transcript: str, state: str, response: str = "", reasoning: str = ""
     ) -> None:
+        """Update only changed transcript sections and preserve scroll intent."""
         previous = self._published_session
         has_new_content = previous is None or (transcript, reasoning, response) != previous
         scroll = self.query_one("#transcript", VerticalScroll)
@@ -396,9 +430,13 @@ class NexusApp(App):
 
 
 class NexusPreview(NexusApp):
+    """Interactive preview that runs without loading assistant services."""
+
     runner = None
 
+
 def main() -> None:
+    """Launch the interface preview."""
     NexusPreview().run()
 
 

@@ -104,6 +104,7 @@ def load_llm_module(monkeypatch):
 
     return module, {
         "agent_instance": agent_instance,
+        "filesystem_backend": filesystem_backend,
         "chat_model": chat_model,
         "chat_nvidia": chat_nvidia,
         "checkpointer": checkpointer,
@@ -121,6 +122,9 @@ def test_agent_builds_model_and_graph_with_expected_tools(monkeypatch):
     result = module.Agent()
 
     assert result is dependencies["agent_instance"]
+    dependencies["filesystem_backend"].assert_called_once_with(
+        root_dir=str(Path.home())
+    )
     dependencies["chat_nvidia"].assert_called_once_with(
         model="z-ai/glm-5.3-flash",
         api_key="test-key",

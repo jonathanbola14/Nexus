@@ -1,3 +1,5 @@
+"""Application entry point and coordination for Nexus audio conversations."""
+
 import argparse
 import queue
 import re
@@ -28,25 +30,25 @@ player = Play()
 
 pipeline = None
 
-SENTENCE_END_RE = re.compile(r'([.!?]+)(\s+|$)')
+SENTENCE_END_RE = re.compile(r"([.!?]+)(\s+|$)")
 
-# Abreviações comuns em pt-BR que terminam com ponto mas não fecham a frase
-# (sem isso, "Dr. Silva chegou" virava duas "frases": "Dr." e "Silva chegou")
+# Common Brazilian Portuguese abbreviations that do not end a sentence.
 _ABBREVIATIONS = {
     "sr", "sra", "srta", "dr", "dra", "prof", "profa", "exmo", "exma",
     "av", "art", "pag", "pág", "cia", "ltda", "etc", "jr", "vs", "min", "seg",
 }
-_LAST_WORD_RE = re.compile(r'([A-Za-zÀ-ÿ]+)$')
+_LAST_WORD_RE = re.compile(r"([A-Za-zÀ-ÿ]+)$")
 
 
 def _cpu_times():
+    """Return cumulative CPU and idle times from Linux procfs."""
     with open("/proc/stat", encoding="ascii") as proc_stat:
         values = proc_stat.readline().split()[1:]
     return sum(map(int, values)), int(values[3])
 
 
 def system_status(previous_cpu_times):
-    """Retorna o uso aproximado de CPU e memória do sistema."""
+    """Calculate system CPU and memory usage for the status bar."""
     current_cpu_times = _cpu_times()
     total_delta = current_cpu_times[0] - previous_cpu_times[0]
     idle_delta = current_cpu_times[1] - previous_cpu_times[1]
@@ -64,6 +66,7 @@ def system_status(previous_cpu_times):
 
 
 def _publish_tool_call_blocks(app, token):
+    """Publish each tool name at most once for a streamed assistant token."""
     published_names = set()
     for block in token.content_blocks:
         if block.get("type") not in {"tool_call", "tool_call_chunk"}:
@@ -75,11 +78,13 @@ def _publish_tool_call_blocks(app, token):
 
 
 def _is_shutdown_command(user_input):
+    """Return whether the recognized utterance asks Nexus to stop."""
     command = re.sub(r"[.!?,;:]+$", "", user_input.strip().casefold()).strip()
     return command in {"desligar", "desliga", "encerrar"}
 
 
 def status_worker(app, stop_event):
+    """Publish system metrics periodically until shutdown is requested."""
     cpu_times = _cpu_times()
     while not stop_event.wait(0.3):
         cpu_times, metrics = system_status(cpu_times)
@@ -87,12 +92,10 @@ def status_worker(app, stop_event):
 
 
 def _is_real_sentence_end(buffer, match):
-    """Filtra falsos-positivos do SENTENCE_END_RE:
-    - "3." pode virar "3.14" no próximo pedaço do stream — só aceita o fim
-      do buffer (sem espaço confirmado depois) quando é '!' ou '?', que
-      raramente continuam; ponto sozinho espera mais texto chegar.
-    - "Dr.", "etc." etc. não fecham frase — checa a palavra antes do ponto
-      contra a lista de abreviações.
+    """Reject punctuation that may continue in the next streamed text chunk.
+
+    A trailing period may be the start of a decimal number, while periods in
+    common abbreviations do not mark sentence boundaries.
     """
     punct, boundary = match.group(1), match.group(2)
 
@@ -108,8 +111,7 @@ def _is_real_sentence_end(buffer, match):
 
 
 def split_ready_sentences(buffer):
-    """Tira do buffer as frases já confirmadas como completas.
-    Retorna (lista_de_frases_prontas, resto_do_buffer)."""
+    """Extract confirmed complete sentences and return the unprocessed tail."""
     sentences = []
     pos = 0
     while True:
@@ -129,7 +131,7 @@ def split_ready_sentences(buffer):
 
 
 SAMPLE_RATE = 20000
-PREBUFFER_SIZE = 1  # quantas frases sintetizadas esperar antes de começar a tocar
+PREBUFFER_SIZE = 1  # Number of synthesized sentences to queue before playback.
 
 tts_queue = queue.Queue()
 playback_queue = queue.Queue()
@@ -149,7 +151,9 @@ stream = mic.open(
     frames_per_buffer=CHUNK,
 )
 
+
 def tts_worker():
+    """Synthesize queued sentences and forward audio to the playback queue."""
     while True:
         sentence = tts_queue.get()
         if sentence is STOP_SIGNAL:
@@ -163,14 +167,18 @@ def tts_worker():
             audio_chunks.append(audio)
 
         if audio_chunks:
-            full_audio = np.concatenate(audio_chunks) if len(audio_chunks) > 1 else audio_chunks[0]
+            full_audio = (
+                np.concatenate(audio_chunks)
+                if len(audio_chunks) > 1
+                else audio_chunks[0]
+            )
             playback_queue.put((sentence, full_audio))
 
         tts_queue.task_done()
 
 
 def playback_worker():
-    """Toca os tensores de áudio prontos, direto da memória, na ordem correta."""
+    """Play queued audio in order, waiting for the configured prebuffer first."""
     prebuffer = []
     stopped_early = False
 
@@ -196,7 +204,7 @@ def playback_worker():
 
 
 def _load_models(load_state, use_wake_word):
-    """Carrega os modelos em uma thread separada e atualiza o progresso."""
+    """Load each model and report progress through the shared loading state."""
     def set_progress(percent, message):
         with load_state["lock"]:
             load_state["percent"] = percent
@@ -232,6 +240,7 @@ def _load_models(load_state, use_wake_word):
 
 
 def load_models(load_state, use_wake_word):
+    """Load models while capturing errors for the UI thread to display."""
     try:
         _load_models(load_state, use_wake_word)
     except Exception as error:
@@ -243,6 +252,7 @@ def load_models(load_state, use_wake_word):
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 def run_assistant(app: App, use_wake_word: bool):
+    """Run the audio, agent, and speech-output loop for the application."""
     global pipeline
     load_state = {
         "lock": threading.Lock(),
@@ -278,7 +288,7 @@ def run_assistant(app: App, use_wake_word: bool):
         if not noise_path.exists():
             app.set_status("Fique em silêncio para calibrar o microfone", "INICIALIZAÇÃO")
             time.sleep(0.5)
-            ruido = resample_pcm16(
+            noise_audio = resample_pcm16(
                 stream.read(
                     num_frames=int(INPUT_RATE * 3.5),
                     exception_on_overflow=False,
@@ -290,7 +300,7 @@ def run_assistant(app: App, use_wake_word: bool):
                 noise_file.setframerate(16000)
                 noise_file.setnchannels(1)
                 noise_file.setsampwidth(2)
-                noise_file.writeframes(data=gain(frame=ruido, ganho=2.0))
+                noise_file.writeframes(data=gain(frame=noise_audio, ganho=2.0))
             player.file(file=str(beep_path))
 
         config: RunnableConfig = {"configurable": {"thread_id": "nexus"}}
@@ -356,8 +366,8 @@ def run_assistant(app: App, use_wake_word: bool):
             playback_thread.start()
 
             sentence_buffer = ""
-            buffer_resposta = ""
-            buffer_raciocinio = ""
+            response_buffer = ""
+            reasoning_buffer = ""
             cpu_times = _cpu_times()
 
             try:
@@ -377,32 +387,34 @@ def run_assistant(app: App, use_wake_word: bool):
                         if block["type"] == "reasoning":
                             piece = block.get("reasoning") or block.get("text", "")
                             if piece:
-                                buffer_raciocinio += piece
+                                reasoning_buffer += piece
                                 transcript = session_history + "Nexus\n"
                                 app.publish_session(
                                     transcript,
                                     "RACIOCINANDO",
-                                    response=buffer_resposta,
-                                    reasoning=buffer_raciocinio,
+                                    response=response_buffer,
+                                    reasoning=reasoning_buffer,
                                 )
                             continue
 
                         if block["type"] == "text" and block.get("text"):
                             piece = block["text"]
                             if metadata["langgraph_node"] == "tools":
-                                buffer_resposta = ""
+                                response_buffer = ""
                                 continue
 
-                            buffer_resposta += piece
+                            response_buffer += piece
                             app.publish_session(
                                 session_history + "Nexus\n",
                                 "RESPONDENDO",
-                                response=buffer_resposta,
-                                reasoning=buffer_raciocinio,
+                                response=response_buffer,
+                                reasoning=reasoning_buffer,
                             )
 
                             sentence_buffer += piece
-                            ready, sentence_buffer = split_ready_sentences(sentence_buffer)
+                            ready, sentence_buffer = split_ready_sentences(
+                                sentence_buffer
+                            )
                             for sentence in ready:
                                 tts_queue.put(sentence)
 
@@ -411,13 +423,13 @@ def run_assistant(app: App, use_wake_word: bool):
                     "Não consegui acessar o serviço de inteligência agora. "
                     "Verifique a chave da API e a conexão com a internet e tente novamente."
                 )
-                buffer_resposta += ("\n\n" if buffer_resposta else "") + fallback
+                response_buffer += ("\n\n" if response_buffer else "") + fallback
                 sentence_buffer += " " + fallback
                 app.publish_session(
                     session_history + "Nexus\n",
                     "ERRO",
-                    response=buffer_resposta,
-                    reasoning=buffer_raciocinio,
+                    response=response_buffer,
+                    reasoning=reasoning_buffer,
                 )
 
             finally:
@@ -427,8 +439,8 @@ def run_assistant(app: App, use_wake_word: bool):
                 tts_thread.join()
                 playback_thread.join()
 
-                if buffer_resposta.strip():
-                    session_history += f"Nexus\n{buffer_resposta.strip()}\n\n"
+                if response_buffer.strip():
+                    session_history += f"Nexus\n{response_buffer.strip()}\n\n"
                 app.publish_session(session_history, "OUVINDO")
 
     except KeyboardInterrupt:
@@ -462,7 +474,8 @@ def run_assistant(app: App, use_wake_word: bool):
             app._shutdown()
 
 
-def main():
+def main() -> None:
+    """Parse command-line options and launch the terminal application."""
     parser = argparse.ArgumentParser(description="Assistente de voz Nexus")
     parser.add_argument(
         "--sem-ativacao",

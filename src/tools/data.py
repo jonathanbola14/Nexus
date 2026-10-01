@@ -4,8 +4,9 @@ from langchain.tools import tool
 
 
 @tool(name_or_callable="Date", description="Pegar a data atual")
-def data():
-    dias = [
+def data() -> tuple[str, str]:
+    """Return the current date and its weekday name in Brazilian Portuguese."""
+    weekdays = [
         "segunda-feira",
         "terça-feira",
         "quarta-feira",
@@ -15,6 +16,6 @@ def data():
         "domingo",
     ]
 
-    agora = datetime.now()  # noqa: DTZ005
+    current_time = datetime.now()  # noqa: DTZ005
 
-    return agora.strftime("%d/%m/%Y"), dias[agora.weekday()]
+    return current_time.strftime("%d/%m/%Y"), weekdays[current_time.weekday()]

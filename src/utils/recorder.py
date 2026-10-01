@@ -1,3 +1,5 @@
+"""Microphone speech capture using WebRTC voice activity detection."""
+
 import pyaudio
 import webrtcvad
 from rich.live import Live
@@ -6,12 +8,11 @@ from rich.text import Text
 
 from src.utils.audio import resample_pcm16
 
-# from .increase_gain import gain
-
 vad = webrtcvad.Vad(2)
 
 
 def _show_capture_status(live: Live, message: str, style: str):
+    """Show capture progress through either Textual or Rich."""
     if getattr(live, "_is_textual_bridge", False) is True:
         state = "CAPTURANDO" if style == "bold green" else "OUVINDO"
         if "Transcrevendo" in message:
@@ -36,6 +37,7 @@ def collect_speech_frames(
     live: Live,
     input_rate: int | None = None,
 ):
+    """Record microphone frames until speech has been followed by silence."""
     input_rate = input_rate or RATE
     frames = []
     silence = 0
@@ -46,8 +48,6 @@ def collect_speech_frames(
     while True:
         frame = stream.read(num_frames=CHUNK, exception_on_overflow=False)
         frame = resample_pcm16(frame, input_rate, RATE)
-        # frame = gain(frame, ganho=1.5)
-
         if vad.is_speech(frame, RATE):
             frames.append(frame)
             silence = 0
@@ -63,7 +63,11 @@ def collect_speech_frames(
             silence += 1
             frames.append(frame)
             if has_speech and capture_state != "silence":
-                _show_capture_status(live, "Pausa detectada; aguardando retomada...", "bold yellow")
+                _show_capture_status(
+                    live,
+                    "Pausa detectada; aguardando retomada...",
+                    "bold yellow",
+                )
                 capture_state = "silence"
 
             if silence >= 30:

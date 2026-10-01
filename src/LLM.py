@@ -1,4 +1,6 @@
 
+"""NVIDIA-backed language agent configuration and construction."""
+
 import os
 from pathlib import Path
 
@@ -15,21 +17,24 @@ from langgraph.store.memory import InMemoryStore
 
 from src.tools import data, hora, print, web_search
 
-home = str(Path.home)
+home = str(Path.home())
 
 backend = FilesystemBackend(root_dir=home)
-middlewares = [
+middleware_stack = [
     MemoryMiddleware(backend=backend, sources=["/memories/AGENTS.md"]),
     ShellToolMiddleware(),
-    TodoListMiddleware()
-    ]
+    TodoListMiddleware(),
+]
 
 store = InMemoryStore()
 
 
 def _get_nvidia_api_key():
+    """Read the API key from the environment or the project .env file."""
     project_env = Path(__file__).resolve().parents[1] / ".env"
-    api_key = os.getenv("NVIDIA_API_KEY") or dotenv_values(project_env).get("NVIDIA_API_KEY")
+    api_key = os.getenv("NVIDIA_API_KEY") or dotenv_values(project_env).get(
+        "NVIDIA_API_KEY"
+    )
     if not api_key:
         raise RuntimeError(
             "Chave NVIDIA_API_KEY ausente. Configure-a no ambiente ou no arquivo .env da raiz do projeto."
@@ -38,13 +43,13 @@ def _get_nvidia_api_key():
 
 
 def Agent():
+    """Build and return the configured conversational agent."""
     llm = ChatNVIDIA(
         model="z-ai/glm-5.3-flash",
         api_key=_get_nvidia_api_key(),
         temperature=1,
         max_tokens=16384,
         seed=42,
-        #model_kwargs={"chat_template_kwargs": {"reasoning_effort": "high"}},
     )
 
     agent: Runnable = create_deep_agent(
@@ -52,7 +57,7 @@ def Agent():
         tools=[hora, data, web_search, print],
         checkpointer=InMemorySaver(),
         store=store,
-        middleware=middlewares,
+        middleware=middleware_stack,
         system_prompt=SystemMessage("""Você é o Nexus, um assistente pessoal de voz para o usuário Jonathan. Toda sua saída é falada em voz alta por um TTS em pt-BR, então escreva como fala, não como escreve.
 
 # Identidade
